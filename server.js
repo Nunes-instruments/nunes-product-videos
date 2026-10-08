@@ -16,13 +16,21 @@ app.use(cors());
 app.use(express.json());
 
 const DATA_FILE = path.join(__dirname, 'public', 'videos_data.json');
+const PHOTOS_DATA_FILE = path.join(__dirname, 'public', 'photos_data.json');
 const CATALOG_FILE = path.join(__dirname, 'catalog.json');
 const THUMBNAIL_DIR = path.join(__dirname, 'public', 'thumbnails');
 const VIDEOS_DIR = "C:\\Users\\NUNES\\Desktop\\New folder";
+const PHOTOS_DIR = "C:\\Users\\NUNES\\Desktop\\Product Photos";
+const PUBLIC_PHOTOS_DIR = path.join(__dirname, 'public', 'photos');
 
-// Serve thumbnails, raw videos, and public static assets
+if (!fs.existsSync(PHOTOS_DIR)) fs.mkdirSync(PHOTOS_DIR, { recursive: true });
+if (!fs.existsSync(PUBLIC_PHOTOS_DIR)) fs.mkdirSync(PUBLIC_PHOTOS_DIR, { recursive: true });
+
+// Serve thumbnails, raw videos, photos, and public static assets
 app.use('/thumbnails', express.static(THUMBNAIL_DIR));
 app.use('/raw-videos', express.static(VIDEOS_DIR));
+app.use('/raw-photos', express.static(PHOTOS_DIR));
+app.use('/photos', express.static(PUBLIC_PHOTOS_DIR));
 app.use(express.static(path.join(__dirname, 'public')));
 if (fs.existsSync(path.join(__dirname, 'dist'))) {
   app.use(express.static(path.join(__dirname, 'dist')));
@@ -215,6 +223,125 @@ app.post('/api/update-drive-url', (req, res) => {
   item.driveUrl = driveUrl;
   saveVideos(videos);
   res.json({ success: true, item });
+});
+
+// --- PHOTO APIs ---
+function loadPhotos() {
+  if (fs.existsSync(PHOTOS_DATA_FILE)) {
+    try {
+      return JSON.parse(fs.readFileSync(PHOTOS_DATA_FILE, 'utf-8'));
+    } catch (e) {
+      console.error('Error reading PHOTOS_DATA_FILE:', e);
+    }
+  }
+  return [];
+}
+
+function savePhotos(photos) {
+  fs.writeFileSync(PHOTOS_DATA_FILE, JSON.stringify(photos, null, 2), 'utf-8');
+  const distPhotos = path.join(__dirname, 'dist', 'photos_data.json');
+  if (fs.existsSync(path.dirname(distPhotos))) {
+    fs.writeFileSync(distPhotos, JSON.stringify(photos, null, 2), 'utf-8');
+  }
+}
+
+// 7. Get all photos
+app.get('/api/photos', (req, res) => {
+  const photos = loadPhotos();
+  res.json({
+    total: photos.length,
+    renamedCount: photos.filter(p => p.isRenamed).length,
+    pendingCount: photos.filter(p => !p.isRenamed).length,
+    photos
+  });
+});
+
+// 8. Rename photo
+app.post('/api/rename-photo', (req, res) => {
+  const { id, newProductName, renameFileOnDisk = true } = req.body;
+  if (!id || !newProductName) {
+    return res.status(400).json({ error: 'id and newProductName are required' });
+  }
+
+  const photos = loadPhotos();
+  const index = photos.findIndex(p => p.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Photo not found' });
+  }
+
+  const item = photos[index];
+  const oldPath = item.filePath;
+  const oldExt = path.extname(item.currentFilename || item.originalFilename || '.jpg');
+  const safeBaseName = newProductName.replace(/[\\/:*?"<>|]/g, '_').trim();
+  const newFilename = `${safeBaseName}${oldExt}`;
+  const newPath = path.join(path.dirname(oldPath), newFilename);
+
+  if (renameFileOnDisk && fs.existsSync(oldPath) && oldPath !== newPath) {
+    try {
+      fs.renameSync(oldPath, newPath);
+      item.filePath = newPath;
+      item.currentFilename = newFilename;
+    } catch (err) {
+      console.error('Disk photo rename failed:', err);
+    }
+  }
+
+  item.productName = newProductName;
+  item.isRenamed = true;
+  item.updatedAt = new Date().toISOString();
+  photos[index] = item;
+  savePhotos(photos);
+  res.json({ success: true, item });
+});
+
+// 9. Photo Upload with multer
+const photoStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, PHOTOS_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const prodName = req.body.productName ? req.body.productName.replace(/[\\/:*?"<>|]/g, '_').trim() : path.basename(file.originalname, ext);
+    cb(null, `${prodName}${ext}`);
+  }
+});
+const uploadPhoto = multer({ storage: photoStorage });
+
+app.post('/api/upload-photo', uploadPhoto.single('photo'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No photo provided' });
+  }
+
+  const photos = loadPhotos();
+  const newId = `photo_${String(photos.length + 1).padStart(3, '0')}`;
+  const ext = path.extname(req.file.filename);
+  const publicDest = path.join(PUBLIC_PHOTOS_DIR, `${newId}${ext}`);
+  try {
+    fs.copyFileSync(req.file.path, publicDest);
+    const distDest = path.join(__dirname, 'dist', 'photos', `${newId}${ext}`);
+    if (fs.existsSync(path.dirname(distDest))) {
+      fs.copyFileSync(req.file.path, distDest);
+    }
+  } catch (e) {
+    console.error('Photo copy warning:', e);
+  }
+
+  const productName = req.body.productName || path.basename(req.file.originalname, ext);
+  const newEntry = {
+    id: newId,
+    originalFilename: req.file.originalname,
+    currentFilename: req.file.filename,
+    productName: productName,
+    isRenamed: true,
+    imageUrl: `/photos/${newId}${ext}`,
+    filePath: req.file.path,
+    sizeMb: Number((req.file.size / (1024 * 1024)).toFixed(2)),
+    category: req.body.category || 'Testing Equipment',
+    driveUrl: req.body.driveUrl || '',
+    createdAt: new Date().toISOString()
+  };
+
+  photos.unshift(newEntry);
+  savePhotos(photos);
+  res.json({ success: true, item: newEntry });
 });
 
 // Catch-all for SPA

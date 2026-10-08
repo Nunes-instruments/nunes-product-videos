@@ -4,14 +4,21 @@ import {
   ExternalLink, HardDrive, Sparkles, X, Filter, FolderUp, 
   ChevronRight, ChevronLeft, RefreshCw, Eye, Tag, AlertCircle,
   Download, Volume2, Info, Maximize2, Minimize2, MoveHorizontal,
-  Smartphone, Monitor, Copy, Check, Radio, Settings
+  Smartphone, Monitor, Copy, Check, Radio, Settings,
+  Camera, Image as ImageIcon, ZoomIn, ZoomOut
 } from 'lucide-react';
 
 const GOOGLE_DRIVE_FOLDER_URL = "https://drive.google.com/drive/u/0/folders/1-vhkY7WfIHVwRlFarYooSwooWwnBWf94";
+const GOOGLE_DRIVE_MY_DRIVE_URL = "https://drive.google.com/drive/u/0/my-drive";
 const DEFAULT_STREAM_SERVER = "https://mortgage-adam-enhancements-univ.trycloudflare.com";
 
 export default function App() {
+  const [dashboardMode, setDashboardMode] = useState('videos'); // 'videos' or 'photos'
   const [videos, setVideos] = useState([]);
+  const [photos, setPhotos] = useState([]);
+  const [selectedPhoto, setSelectedPhoto] = useState(null);
+  const [photoFitMode, setPhotoFitMode] = useState('contain'); // 'contain' or 'cover'
+  const [photoZoom, setPhotoZoom] = useState(1);
   const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -107,6 +114,24 @@ export default function App() {
       }
       setVideos(loadedVideos);
 
+      // Fetch photos
+      try {
+        const photoEndpoint = isLocalHost ? '/api/photos' : `${streamServerUrl}/api/photos`;
+        const pRes = await fetch(photoEndpoint);
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          setPhotos(pData.photos || []);
+        } else {
+          throw new Error('Photo API error');
+        }
+      } catch {
+        const fbRes = await fetch('/photos_data.json');
+        if (fbRes.ok) {
+          const pData = await fbRes.json();
+          setPhotos(pData || []);
+        }
+      }
+
       // Fetch catalog
       try {
         const catRes = await fetch('/api/catalog');
@@ -124,7 +149,7 @@ export default function App() {
         console.warn('Catalog load note:', e);
       }
     } catch (e) {
-      console.error('Error fetching videos:', e);
+      console.error('Error fetching data:', e);
     } finally {
       setLoading(false);
     }
@@ -150,9 +175,27 @@ export default function App() {
     });
   }, [videos, searchTerm, activeTab]);
 
-  const totalCount = videos.length;
-  const renamedCount = videos.filter(v => v.isRenamed).length;
-  const pendingCount = totalCount - renamedCount;
+  // Filtered photos
+  const filteredPhotos = useMemo(() => {
+    return photos.filter(p => {
+      const q = searchTerm.toLowerCase();
+      const matchesSearch = 
+        (p.productName && p.productName.toLowerCase().includes(q)) ||
+        (p.currentFilename && p.currentFilename.toLowerCase().includes(q)) ||
+        (p.originalFilename && p.originalFilename.toLowerCase().includes(q)) ||
+        (p.category && p.category.toLowerCase().includes(q));
+
+      if (activeTab === 'renamed') return matchesSearch && p.isRenamed;
+      if (activeTab === 'pending') return matchesSearch && !p.isRenamed;
+      return matchesSearch;
+    });
+  }, [photos, searchTerm, activeTab]);
+
+  const currentTotal = dashboardMode === 'videos' ? videos.length : photos.length;
+  const currentRenamed = dashboardMode === 'videos' 
+    ? videos.filter(v => v.isRenamed).length 
+    : photos.filter(p => p.isRenamed).length;
+  const currentPending = currentTotal - currentRenamed;
 
   // Open player immediately when card clicked
   const handlePlayVideo = (video) => {
@@ -161,19 +204,23 @@ export default function App() {
   };
 
   // Open rename
-  const openRename = (video, e) => {
+  const openRename = (item, e) => {
     if (e) e.stopPropagation();
-    setRenameTarget(video);
-    setNewTitle(video.productName || '');
+    setRenameTarget(item);
+    setNewTitle(item.productName || '');
     setRenameModalOpen(true);
   };
 
-  // Save Rename
+  // Save Rename (works for both video and photo)
   const handleSaveRename = async () => {
     if (!newTitle.trim() || !renameTarget) return;
     setIsRenaming(true);
     try {
-      const endpoint = isLocalHost ? '/api/rename' : `${streamServerUrl}/api/rename`;
+      const isPhoto = dashboardMode === 'photos' || (renameTarget.id && renameTarget.id.startsWith('photo_'));
+      const endpoint = isLocalHost 
+        ? (isPhoto ? '/api/rename-photo' : '/api/rename')
+        : `${streamServerUrl}${isPhoto ? '/api/rename-photo' : '/api/rename'}`;
+
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -186,46 +233,53 @@ export default function App() {
 
       if (res.ok) {
         const result = await res.json();
-        setVideos(prev => prev.map(v => v.id === renameTarget.id ? result.item : v));
-        if (selectedVideo && selectedVideo.id === renameTarget.id) {
-          setSelectedVideo(result.item);
+        if (isPhoto) {
+          setPhotos(prev => prev.map(p => p.id === renameTarget.id ? result.item : p));
+          if (selectedPhoto && selectedPhoto.id === renameTarget.id) {
+            setSelectedPhoto(result.item);
+          }
+        } else {
+          setVideos(prev => prev.map(v => v.id === renameTarget.id ? result.item : v));
+          if (selectedVideo && selectedVideo.id === renameTarget.id) {
+            setSelectedVideo(result.item);
+          }
         }
         setRenameModalOpen(false);
       } else {
-        setVideos(prev => prev.map(v => {
-          if (v.id === renameTarget.id) {
-            return { ...v, productName: newTitle.trim(), isRenamed: true };
-          }
-          return v;
-        }));
+        if (isPhoto) {
+          setPhotos(prev => prev.map(p => p.id === renameTarget.id ? { ...p, productName: newTitle.trim(), isRenamed: true } : p));
+        } else {
+          setVideos(prev => prev.map(v => v.id === renameTarget.id ? { ...v, productName: newTitle.trim(), isRenamed: true } : v));
+        }
         setRenameModalOpen(false);
       }
     } catch (err) {
-      setVideos(prev => prev.map(v => {
-        if (v.id === renameTarget.id) {
-          return { ...v, productName: newTitle.trim(), isRenamed: true };
-        }
-        return v;
-      }));
       setRenameModalOpen(false);
     } finally {
       setIsRenaming(false);
     }
   };
 
-  // Upload handler
+  // Upload handler (works for both video and photo)
   const handleUpload = async (e) => {
     e.preventDefault();
     if (!uploadFile) return;
 
     setUploading(true);
     const formData = new FormData();
-    formData.append('video', uploadFile);
+    const isPhoto = dashboardMode === 'photos';
+    if (isPhoto) {
+      formData.append('photo', uploadFile);
+    } else {
+      formData.append('video', uploadFile);
+    }
     formData.append('productName', uploadProductName || uploadFile.name);
     formData.append('driveUrl', uploadDriveUrl);
 
     try {
-      const endpoint = isLocalHost ? '/api/upload' : `${streamServerUrl}/api/upload`;
+      const endpoint = isLocalHost 
+        ? (isPhoto ? '/api/upload-photo' : '/api/upload')
+        : `${streamServerUrl}${isPhoto ? '/api/upload-photo' : '/api/upload'}`;
       const res = await fetch(endpoint, {
         method: 'POST',
         body: formData
@@ -233,7 +287,11 @@ export default function App() {
 
       if (res.ok) {
         const result = await res.json();
-        setVideos(prev => [result.item, ...prev]);
+        if (isPhoto) {
+          setPhotos(prev => [result.item, ...prev]);
+        } else {
+          setVideos(prev => [result.item, ...prev]);
+        }
         setUploadModalOpen(false);
         setUploadFile(null);
         setUploadProductName('');
@@ -291,35 +349,76 @@ export default function App() {
       )}
 
       {/* Top Navigation Bar - Crisp White Theme */}
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-sm px-4 lg:px-8 py-3.5">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-sm px-4 lg:px-8 py-3">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3.5">
           
           {/* Logo & Company Title */}
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/25">
-              <Film className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-extrabold text-lg text-slate-900 tracking-tight">NUNES INSTRUMENTS</h1>
-                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">
-                  Video Hub
-                </span>
+          <div className="flex items-center justify-between sm:justify-start gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/25">
+                {dashboardMode === 'videos' ? <Film className="w-5 h-5 text-white" /> : <Camera className="w-5 h-5 text-white" />}
               </div>
-              <p className="text-xs text-slate-500 font-medium">179 Products Identified • Google Drive Synced</p>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <h1 className="font-extrabold text-base text-slate-900 tracking-tight">NUNES INSTRUMENTS</h1>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">
+                    {dashboardMode === 'videos' ? 'Video Hub' : 'Photo Gallery'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  {currentTotal} Products Identified • Google Drive Synced
+                </p>
+              </div>
+            </div>
+
+            {/* Mode Switcher Pill */}
+            <div className="flex items-center p-1 bg-slate-100 rounded-2xl border border-slate-200 shadow-inner">
+              <button
+                onClick={() => { setDashboardMode('videos'); setSearchTerm(''); }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                  dashboardMode === 'videos'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Film className="w-3.5 h-3.5" />
+                <span>Videos</span>
+                <span className={`px-1.5 py-0.2 rounded-md text-[10px] font-black ${
+                  dashboardMode === 'videos' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {videos.length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => { setDashboardMode('photos'); setSearchTerm(''); }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                  dashboardMode === 'photos'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>Photos</span>
+                <span className={`px-1.5 py-0.2 rounded-md text-[10px] font-black ${
+                  dashboardMode === 'photos' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {photos.length}
+                </span>
+              </button>
             </div>
           </div>
 
           {/* Search Bar */}
-          <div className="flex-1 max-w-xl mx-auto w-full">
+          <div className="flex-1 max-w-lg mx-auto w-full">
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input 
                 type="text" 
-                placeholder="Search products: Gas Detector, Sieve Shaker, pH Meter, Oven, Caliper..."
+                placeholder={dashboardMode === 'videos' ? "Search videos: Gas Detector, Sieve Shaker, pH Meter, Oven..." : "Search photos: Multimeter, Water Bath, Moisture Meter, Dynamometer..."}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-slate-50 hover:bg-white focus:bg-white border border-slate-300 rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent transition shadow-inner"
+                className="w-full bg-slate-50 hover:bg-white focus:bg-white border border-slate-300 rounded-xl pl-10 pr-10 py-2 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent transition shadow-inner"
               />
               {searchTerm && (
                 <button 
@@ -333,11 +432,11 @@ export default function App() {
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center gap-2 sm:gap-2.5">
+          <div className="flex items-center gap-2">
             {/* Live Stream Status Badge */}
             <button
               onClick={() => { setCustomStreamInput(streamServerUrl); setStreamSettingsOpen(true); }}
-              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl border transition shadow-sm ${
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-xl border transition shadow-sm ${
                 streamConnected 
                   ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100' 
                   : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
@@ -351,23 +450,23 @@ export default function App() {
 
             {/* Google Drive Link Button */}
             <a
-              href={GOOGLE_DRIVE_FOLDER_URL}
+              href={dashboardMode === 'videos' ? GOOGLE_DRIVE_FOLDER_URL : GOOGLE_DRIVE_MY_DRIVE_URL}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-2 px-3.5 py-2 text-xs font-bold rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition shadow-sm"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition shadow-sm"
               title="Open Google Drive Cloud Folder"
             >
-              <HardDrive className="w-4 h-4 text-emerald-600" />
-              <span className="hidden md:inline">Google Drive</span>
-              <ExternalLink className="w-3 h-3 text-emerald-600 ml-0.5" />
+              <HardDrive className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden md:inline">Drive</span>
+              <ExternalLink className="w-3 h-3 text-emerald-600" />
             </a>
 
             <button
               onClick={() => setUploadModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-600/25 transition transform active:scale-95"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-600/25 transition transform active:scale-95"
             >
-              <Upload className="w-4 h-4" />
-              <span className="hidden sm:inline">Add Video</span>
+              <Upload className="w-3.5 h-3.5" />
+              <span>{dashboardMode === 'videos' ? 'Add Video' : 'Add Photo'}</span>
             </button>
           </div>
 
@@ -375,29 +474,29 @@ export default function App() {
       </header>
 
       {/* Filter and Metrics Strip */}
-      <section className="bg-white border-b border-slate-200 px-4 lg:px-8 py-3.5">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <section className="bg-white border-b border-slate-200 px-4 lg:px-8 py-3">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           
           {/* Quick Counter Tabs */}
-          <div className="flex items-center flex-wrap gap-2.5">
+          <div className="flex items-center flex-wrap gap-2">
             <button 
               onClick={() => setActiveTab('all')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition border ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
                 activeTab === 'all' 
                   ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
               }`}
             >
-              <Film className="w-3.5 h-3.5" />
-              <span>Total Products:</span>
+              {dashboardMode === 'videos' ? <Film className="w-3.5 h-3.5" /> : <Camera className="w-3.5 h-3.5" />}
+              <span>Total {dashboardMode === 'videos' ? 'Videos' : 'Photos'}:</span>
               <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-800'}`}>
-                {totalCount}
+                {currentTotal}
               </span>
             </button>
 
             <button 
               onClick={() => setActiveTab('renamed')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition border ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
                 activeTab === 'renamed' 
                   ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
                   : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
@@ -406,14 +505,14 @@ export default function App() {
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
               <span>Identified & Named:</span>
               <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'renamed' ? 'bg-white/20 text-white' : 'bg-emerald-200/80 text-emerald-900'}`}>
-                {renamedCount}
+                {currentRenamed}
               </span>
             </button>
 
-            {pendingCount > 0 && (
+            {currentPending > 0 && (
               <button 
                 onClick={() => setActiveTab('pending')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition border ${
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
                   activeTab === 'pending' 
                     ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
                     : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
@@ -422,16 +521,16 @@ export default function App() {
                 <Clock className="w-3.5 h-3.5 text-amber-600" />
                 <span>Needs Review:</span>
                 <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'pending' ? 'bg-white/20 text-white' : 'bg-amber-200/80 text-amber-900'}`}>
-                  {pendingCount}
+                  {currentPending}
                 </span>
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-slate-600 font-medium">
+          <div className="flex items-center gap-2 text-xs text-slate-600 font-medium">
             <span className="flex items-center gap-1.5 bg-blue-50 text-blue-800 px-3 py-1 rounded-lg border border-blue-200">
               <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-              <span>Click any card to play in Full-Fit Screen</span>
+              <span>{dashboardMode === 'videos' ? 'Click card to play in Full-Fit Screen' : 'Click photo card for HD Lightbox & Zoom'}</span>
             </span>
           </div>
 
@@ -444,23 +543,26 @@ export default function App() {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-28 gap-3">
             <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
-            <p className="text-sm font-semibold text-slate-500">Loading Nunes Product Videos...</p>
+            <p className="text-sm font-semibold text-slate-500">
+              Loading Nunes Product {dashboardMode === 'videos' ? 'Videos' : 'Photos'}...
+            </p>
           </div>
-        ) : filteredVideos.length === 0 ? (
-          <div className="text-center py-20 bg-white rounded-3xl border border-slate-200 p-8 shadow-sm">
-            <Film className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-            <h3 className="text-base font-bold text-slate-800">No product videos found</h3>
-            <p className="text-sm text-slate-500 mt-1">Try another search keyword or switch filters.</p>
-            <button
-              onClick={() => { setSearchTerm(''); setActiveTab('all'); }}
-              className="mt-4 px-4 py-2 text-xs font-bold rounded-xl bg-blue-600 text-white hover:bg-blue-700 shadow-sm"
-            >
-              Show All Products
-            </button>
-          </div>
-        ) : (
-          /* PRODUCT VIDEO BOX GRID */
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+        ) : dashboardMode === 'videos' ? (
+          filteredVideos.length === 0 ? (
+            <div className="text-center py-20 bg-white rounded-3xl border border-slate-200 p-8 shadow-sm">
+              <Film className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+              <h3 className="text-base font-bold text-slate-800">No product videos found</h3>
+              <p className="text-sm text-slate-500 mt-1">Try another search keyword or switch filters.</p>
+              <button
+                onClick={() => { setSearchTerm(''); setActiveTab('all'); }}
+                className="mt-4 px-4 py-2 text-xs font-bold rounded-xl bg-blue-600 text-white hover:bg-blue-700 shadow-sm"
+              >
+                Show All Products
+              </button>
+            </div>
+          ) : (
+            /* PRODUCT VIDEO BOX GRID */
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {filteredVideos.map((video) => (
               <div
                 key={video.id}
@@ -556,6 +658,119 @@ export default function App() {
               </div>
             ))}
           </div>
+          )
+        ) : (
+          /* PHOTOS MODE */
+          filteredPhotos.length === 0 ? (
+            <div className="text-center py-20 bg-white rounded-3xl border border-slate-200 p-8 shadow-sm">
+              <Camera className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+              <h3 className="text-base font-bold text-slate-800">No product photos found</h3>
+              <p className="text-sm text-slate-500 mt-1">Try another search keyword or switch filters.</p>
+              <button
+                onClick={() => { setSearchTerm(''); setActiveTab('all'); }}
+                className="mt-4 px-4 py-2 text-xs font-bold rounded-xl bg-purple-600 text-white hover:bg-purple-700 shadow-sm"
+              >
+                Show All Photos
+              </button>
+            </div>
+          ) : (
+            /* PRODUCT PHOTO BOX GRID */
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+              {filteredPhotos.map((photo) => (
+                <div
+                  key={photo.id}
+                  onClick={() => { setSelectedPhoto(photo); setPhotoZoom(1); }}
+                  className="group relative bg-white hover:bg-slate-50/50 rounded-2xl border border-slate-200 hover:border-purple-400 hover:shadow-xl transition-all duration-200 overflow-hidden flex flex-col cursor-pointer transform hover:-translate-y-1 shadow-sm"
+                >
+                  {/* Photo Display Frame */}
+                  <div className="relative aspect-video w-full bg-slate-100 overflow-hidden flex items-center justify-center">
+                    <img
+                      src={photo.imageUrl}
+                      alt={photo.productName}
+                      loading="lazy"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      onError={(e) => {
+                        e.target.src = "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=600&auto=format&fit=crop&q=60";
+                      }}
+                    />
+
+                    {/* Gradient shadow overlay */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/20" />
+
+                    {/* Central Zoom Icon Overlay */}
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="w-11 h-11 rounded-full bg-purple-600/90 text-white flex items-center justify-center shadow-lg transform group-hover:scale-110 transition-all">
+                        <ZoomIn className="w-5 h-5 text-white" />
+                      </div>
+                    </div>
+
+                    {/* Status Badge */}
+                    <div className="absolute top-2.5 left-2.5">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-500 text-white px-2 py-0.5 rounded-full shadow-sm">
+                        <CheckCircle2 className="w-3 h-3" /> Named
+                      </span>
+                    </div>
+
+                    {/* Resolution / Dimensions Badge */}
+                    {photo.width && photo.height && (
+                      <span className="absolute bottom-2.5 right-2.5 text-[10px] font-bold bg-black/75 text-white px-2 py-0.5 rounded-md backdrop-blur-sm">
+                        {photo.width} × {photo.height}
+                      </span>
+                    )}
+
+                    {/* File Size Badge */}
+                    <span className="absolute top-2.5 right-2.5 text-[10px] font-semibold bg-white/90 text-slate-800 px-2 py-0.5 rounded-md backdrop-blur-sm shadow-sm">
+                      {photo.sizeMb} MB
+                    </span>
+                  </div>
+
+                  {/* Box Card Content */}
+                  <div className="p-4 flex-1 flex flex-col justify-between bg-white">
+                    <div>
+                      {/* Category pill */}
+                      {photo.category && (
+                        <span className="text-[10px] font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-100 inline-block mb-1.5">
+                          {photo.category}
+                        </span>
+                      )}
+
+                      {/* Product Title */}
+                      <h3 
+                        className="font-bold text-sm text-slate-900 group-hover:text-purple-600 line-clamp-2 transition-colors leading-snug"
+                        title={photo.productName}
+                      >
+                        {photo.productName}
+                      </h3>
+
+                      {/* Clean Filename on Disk */}
+                      <p className="text-[11px] text-slate-400 mt-1 font-mono truncate" title={photo.currentFilename}>
+                        {photo.currentFilename}
+                      </p>
+                    </div>
+
+                    {/* Action Bar */}
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                      <button
+                        onClick={(e) => openRename(photo, e)}
+                        className="flex items-center gap-1.5 text-purple-600 hover:text-purple-700 font-semibold px-2 py-1 rounded-lg hover:bg-purple-50 transition"
+                        title="Rename this product photo"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Rename</span>
+                      </button>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-semibold text-slate-600 flex items-center gap-1 bg-slate-100 hover:bg-purple-50 hover:text-purple-600 px-2.5 py-1 rounded-md transition">
+                          <Eye className="w-3 h-3 text-purple-600" /> View HD
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              ))}
+            </div>
+          )
         )}
 
       </main>
@@ -775,6 +990,177 @@ export default function App() {
         </div>
       )}
 
+      {/* FULL-FIT HD PHOTO LIGHTBOX MODAL */}
+      {selectedPhoto && (
+        <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-2 sm:p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden shadow-2xl transition-all duration-300">
+            
+            {/* Modal Header */}
+            <div className="p-3.5 sm:px-6 border-b border-slate-800 flex items-center justify-between bg-slate-950/95 text-white">
+              <div className="flex-1 pr-3">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm sm:text-base font-bold text-white truncate">{selectedPhoto.productName}</h2>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 whitespace-nowrap">
+                    {selectedPhoto.category || "Testing Equipment"}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">
+                  {selectedPhoto.currentFilename} • {selectedPhoto.width} × {selectedPhoto.height} • {selectedPhoto.sizeMb} MB
+                </p>
+              </div>
+
+              {/* View Controls */}
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                {/* Zoom Out */}
+                <button
+                  onClick={() => setPhotoZoom(z => Math.max(0.5, Number((z - 0.25).toFixed(2))))}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                  title="Zoom Out"
+                >
+                  <ZoomOut className="w-4 h-4 text-slate-300" />
+                </button>
+
+                {/* Zoom Level Reset Badge */}
+                <button
+                  onClick={() => setPhotoZoom(1)}
+                  className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] font-mono font-bold text-slate-300 border border-slate-700 transition"
+                  title="Reset Zoom to 100%"
+                >
+                  {Math.round(photoZoom * 100)}%
+                </button>
+
+                {/* Zoom In */}
+                <button
+                  onClick={() => setPhotoZoom(z => Math.min(3.0, Number((z + 0.25).toFixed(2))))}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                  title="Zoom In"
+                >
+                  <ZoomIn className="w-4 h-4 text-purple-400" />
+                </button>
+
+                {/* Fit Mode Toggle */}
+                <button
+                  onClick={() => setPhotoFitMode(prev => prev === 'contain' ? 'cover' : 'contain')}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-semibold flex items-center gap-1.5 transition"
+                  title="Toggle Full Fill vs Aspect Fit"
+                >
+                  <MoveHorizontal className="w-3.5 h-3.5 text-blue-400" />
+                  <span className="text-[11px] hidden sm:inline">{photoFitMode === 'cover' ? 'Full Fill' : 'Fit Screen'}</span>
+                </button>
+
+                {/* Download */}
+                <a
+                  href={selectedPhoto.imageUrl}
+                  download={selectedPhoto.currentFilename || "product-photo.jpg"}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                  title="Download Photo"
+                >
+                  <Download className="w-4 h-4 text-emerald-400" />
+                </a>
+
+                {/* Rename Button */}
+                <button
+                  onClick={() => openRename(selectedPhoto)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition shadow-sm"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Rename</span>
+                </button>
+
+                {/* Close Button */}
+                <button
+                  onClick={() => { setSelectedPhoto(null); setPhotoZoom(1); }}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* PHOTO DISPLAY CONTAINER WITH ZOOM & PAN */}
+            <div 
+              className="flex-1 relative overflow-hidden bg-black flex items-center justify-center p-4 cursor-zoom-in"
+              onDoubleClick={() => setPhotoZoom(z => z === 1 ? 2 : 1)}
+            >
+              {/* Soft Ambient Blurred Poster in Background */}
+              <div 
+                className="absolute inset-0 bg-cover bg-center opacity-30 blur-2xl transform scale-125 pointer-events-none"
+                style={{ backgroundImage: `url(${selectedPhoto.imageUrl})` }}
+              />
+
+              {/* High-Resolution Product Image */}
+              <img
+                src={selectedPhoto.imageUrl}
+                alt={selectedPhoto.productName}
+                style={{ transform: `scale(${photoZoom})` }}
+                className={`relative z-10 transition-transform duration-200 select-none shadow-2xl rounded-lg max-h-full max-w-full ${
+                  photoFitMode === 'cover' ? 'w-full h-full object-cover' : 'object-contain'
+                }`}
+                onError={(e) => {
+                  e.target.src = "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=800&auto=format&fit=crop&q=80";
+                }}
+              />
+            </div>
+
+            {/* Photo Modal Footer */}
+            <div className="p-3 sm:px-6 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Ready in Gallery
+                </span>
+                <span className="hidden md:inline font-mono text-[11px] text-slate-500 truncate max-w-xs">
+                  {selectedPhoto.filePath || "Product Photos"}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* Google Drive Link */}
+                <a
+                  href={GOOGLE_DRIVE_MY_DRIVE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition border border-slate-700 shadow-sm"
+                  title="Open in Google Drive Photos Folder"
+                >
+                  <HardDrive className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Google Drive Photos</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+
+                {/* Previous Photo */}
+                <button
+                  onClick={() => {
+                    const currentIdx = photos.findIndex(p => p.id === selectedPhoto.id);
+                    const prevIdx = (currentIdx - 1 + photos.length) % photos.length;
+                    setSelectedPhoto(photos[prevIdx]);
+                    setPhotoZoom(1);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold flex items-center gap-1 shadow-sm"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>Prev</span>
+                </button>
+
+                {/* Next Photo */}
+                <button
+                  onClick={() => {
+                    const currentIdx = photos.findIndex(p => p.id === selectedPhoto.id);
+                    const nextIdx = (currentIdx + 1) % photos.length;
+                    setSelectedPhoto(photos[nextIdx]);
+                    setPhotoZoom(1);
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold flex items-center gap-1 shadow-sm"
+                >
+                  <span>Next Photo</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {/* RENAME PRODUCT MODAL */}
       {renameModalOpen && renameTarget && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -786,8 +1172,12 @@ export default function App() {
                   <Edit3 className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 text-base">Rename Product Video</h3>
-                  <p className="text-xs text-slate-500">Assign the official product name to this video</p>
+                  <h3 className="font-bold text-slate-900 text-base">
+                    Rename Product {renameTarget.id && renameTarget.id.startsWith('photo_') ? 'Photo' : 'Video'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Assign the official product name to this {renameTarget.id && renameTarget.id.startsWith('photo_') ? 'photo' : 'video'}
+                  </p>
                 </div>
               </div>
               <button 
@@ -798,10 +1188,10 @@ export default function App() {
               </button>
             </div>
 
-            {/* Video preview thumbnail */}
+            {/* Video / Photo preview thumbnail */}
             <div className="my-4 flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-200">
               <img 
-                src={renameTarget.thumbnailUrl} 
+                src={renameTarget.thumbnailUrl || renameTarget.imageUrl} 
                 alt="preview" 
                 className="w-20 h-14 object-cover rounded-xl bg-slate-900 border border-slate-200" 
               />
@@ -865,7 +1255,7 @@ export default function App() {
                   className="w-4 h-4 rounded text-blue-600 bg-white border-slate-300 focus:ring-blue-600"
                 />
                 <label htmlFor="renameDisk" className="text-xs text-slate-700 select-none">
-                  Also rename actual <span className="font-mono text-blue-600 font-semibold">.mp4</span> file on disk in <code className="text-slate-600">New folder</code>
+                  Also rename actual <span className="font-mono text-blue-600 font-semibold">{renameTarget.id && renameTarget.id.startsWith('photo_') ? '.jpg' : '.mp4'}</span> file on disk in <code className="text-slate-600">{renameTarget.id && renameTarget.id.startsWith('photo_') ? 'Product Photos' : 'New folder'}</code>
                 </label>
               </div>
             </div>
@@ -913,8 +1303,12 @@ export default function App() {
                   <FolderUp className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 text-base">Add New Product Video</h3>
-                  <p className="text-xs text-slate-500">Upload video with custom rename option</p>
+                  <h3 className="font-bold text-slate-900 text-base">
+                    Add New Product {dashboardMode === 'photos' ? 'Photo' : 'Video'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Upload {dashboardMode === 'photos' ? 'photo' : 'video'} with custom rename option
+                  </p>
                 </div>
               </div>
               <button onClick={() => setUploadModalOpen(false)} className="text-slate-400 hover:text-slate-600">
@@ -925,11 +1319,11 @@ export default function App() {
             <form onSubmit={handleUpload} className="mt-4 space-y-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Select Video File (.mp4, .mov, .avi):
+                  Select {dashboardMode === 'photos' ? 'Photo File (.jpg, .jpeg, .png, .webp):' : 'Video File (.mp4, .mov, .avi):'}
                 </label>
                 <input
                   type="file"
-                  accept="video/*"
+                  accept={dashboardMode === 'photos' ? "image/*" : "video/*"}
                   required
                   onChange={(e) => {
                     const file = e.target.files[0];
