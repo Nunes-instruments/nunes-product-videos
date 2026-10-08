@@ -1,4 +1,4 @@
-"""
+r"""
 Nunes Instruments - Product Photo Auto Processor & OCR Renamer
 Processes photos placed into C:\Users\NUNES\Desktop\Product Photos
 Extracts product names via RapidOCR and matches catalog, renames files on disk,
