@@ -20,8 +20,9 @@ const CATALOG_FILE = path.join(__dirname, 'catalog.json');
 const THUMBNAIL_DIR = path.join(__dirname, 'public', 'thumbnails');
 const VIDEOS_DIR = "C:\\Users\\NUNES\\Desktop\\New folder";
 
-// Serve thumbnails and public static assets
+// Serve thumbnails, raw videos, and public static assets
 app.use('/thumbnails', express.static(THUMBNAIL_DIR));
+app.use('/raw-videos', express.static(VIDEOS_DIR));
 app.use(express.static(path.join(__dirname, 'public')));
 if (fs.existsSync(path.join(__dirname, 'dist'))) {
   app.use(express.static(path.join(__dirname, 'dist')));
@@ -128,7 +129,8 @@ app.get('/api/stream/:id', (req, res) => {
   if (range) {
     const parts = range.replace(/bytes=/, "").split("-");
     const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const CHUNK_SIZE = 1024 * 1024 * 2; // 2MB chunk for instant start
+    const end = parts[1] ? parseInt(parts[1], 10) : Math.min(start + CHUNK_SIZE, fileSize - 1);
     const chunksize = (end - start) + 1;
     const file = fs.createReadStream(videoPath, { start, end });
     const head = {

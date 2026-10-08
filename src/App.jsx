@@ -3,8 +3,11 @@ import {
   Search, Play, Edit3, Upload, Film, CheckCircle2, Clock, 
   ExternalLink, HardDrive, Sparkles, X, Filter, FolderUp, 
   ChevronRight, ChevronLeft, RefreshCw, Eye, Tag, AlertCircle,
-  Download, Volume2, Info
+  Download, Volume2, Info, Maximize2, Minimize2, MoveHorizontal,
+  Smartphone, Monitor, Copy, Check
 } from 'lucide-react';
+
+const GOOGLE_DRIVE_FOLDER_URL = "https://drive.google.com/drive/u/0/folders/1-vhkY7WfIHVwRlFarYooSwooWwnBWf94";
 
 export default function App() {
   const [videos, setVideos] = useState([]);
@@ -17,8 +20,10 @@ export default function App() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [driveModalOpen, setDriveModalOpen] = useState(false);
 
-  // Video playback error handling
-  const [videoError, setVideoError] = useState(false);
+  // Video player modes & controls
+  const [videoFitMode, setVideoFitMode] = useState('contain'); // 'contain' or 'cover'
+  const [isTheaterMode, setIsTheaterMode] = useState(false); // full page / theater mode
+  const [copiedLink, setCopiedLink] = useState(false);
   const videoRef = useRef(null);
 
   // Rename modal states
@@ -47,7 +52,6 @@ export default function App() {
           throw new Error('API not ok');
         }
       } catch (err) {
-        // Fallback to static public JSON
         const fallbackRes = await fetch('/videos_data.json');
         loadedVideos = await fallbackRes.json();
       }
@@ -86,6 +90,7 @@ export default function App() {
       const q = searchTerm.toLowerCase();
       const matchesSearch = 
         (v.productName && v.productName.toLowerCase().includes(q)) ||
+        (v.currentFilename && v.currentFilename.toLowerCase().includes(q)) ||
         (v.originalFilename && v.originalFilename.toLowerCase().includes(q)) ||
         (v.category && v.category.toLowerCase().includes(q));
 
@@ -101,7 +106,6 @@ export default function App() {
 
   // Open player immediately when card clicked
   const handlePlayVideo = (video) => {
-    setVideoError(false);
     setSelectedVideo(video);
   };
 
@@ -109,7 +113,7 @@ export default function App() {
   const openRename = (video, e) => {
     if (e) e.stopPropagation();
     setRenameTarget(video);
-    setNewTitle(video.isRenamed ? video.productName : '');
+    setNewTitle(video.productName || '');
     setRenameModalOpen(true);
   };
 
@@ -136,7 +140,6 @@ export default function App() {
         }
         setRenameModalOpen(false);
       } else {
-        // Local client update
         setVideos(prev => prev.map(v => {
           if (v.id === renameTarget.id) {
             return { ...v, productName: newTitle.trim(), isRenamed: true };
@@ -183,13 +186,19 @@ export default function App() {
         setUploadProductName('');
         setUploadDriveUrl('');
       } else {
-        alert('Server upload response: Make sure local server is running.');
+        alert('Server upload error. Make sure local server is running.');
       }
     } catch (err) {
       alert('Upload failed: ' + err.message);
     } finally {
       setUploading(false);
     }
+  };
+
+  const copyDriveLink = () => {
+    navigator.clipboard.writeText(GOOGLE_DRIVE_FOLDER_URL);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
   return (
@@ -211,7 +220,7 @@ export default function App() {
                   Video Hub
                 </span>
               </div>
-              <p className="text-xs text-slate-500 font-medium">Product Video Catalog & Cloud Drive Hub</p>
+              <p className="text-xs text-slate-500 font-medium">Product Video Catalog & Google Drive Manager</p>
             </div>
           </div>
 
@@ -239,17 +248,22 @@ export default function App() {
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2.5">
-            <button
-              onClick={() => setDriveModalOpen(true)}
-              className="flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 transition shadow-sm hover:border-slate-300"
+            {/* Google Drive Link Button */}
+            <a
+              href={GOOGLE_DRIVE_FOLDER_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-2 px-3.5 py-2 text-xs font-bold rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition shadow-sm"
+              title="Open Google Drive Folder"
             >
               <HardDrive className="w-4 h-4 text-emerald-600" />
-              <span>Drive Sync</span>
-            </button>
+              <span>Google Drive</span>
+              <ExternalLink className="w-3 h-3 text-emerald-600 ml-0.5" />
+            </a>
 
             <button
               onClick={() => setUploadModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-600/25 transition transform active:scale-95"
+              className="flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-600/25 transition transform active:scale-95"
             >
               <Upload className="w-4 h-4" />
               <span>Add New Video</span>
@@ -304,16 +318,18 @@ export default function App() {
               }`}
             >
               <Clock className="w-3.5 h-3.5 text-amber-600" />
-              <span>Needs Name:</span>
+              <span>Needs Review:</span>
               <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'pending' ? 'bg-white/20 text-white' : 'bg-amber-200/80 text-amber-900'}`}>
                 {pendingCount}
               </span>
             </button>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-            <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-            <span>Click any card to play video directly or edit product name</span>
+          <div className="flex items-center gap-3 text-xs text-slate-600 font-medium">
+            <span className="flex items-center gap-1.5 bg-blue-50 text-blue-800 px-3 py-1 rounded-lg border border-blue-200">
+              <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+              <span>Click any card to play instantly with Full-Fit controls</span>
+            </span>
           </div>
 
         </div>
@@ -382,7 +398,7 @@ export default function App() {
                   <div className="absolute top-2.5 left-2.5">
                     {video.isRenamed ? (
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-500 text-white px-2 py-0.5 rounded-full shadow-sm">
-                        <CheckCircle2 className="w-3 h-3" /> Identified
+                        <CheckCircle2 className="w-3 h-3" /> Named
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-amber-500 text-white px-2 py-0.5 rounded-full shadow-sm">
@@ -409,7 +425,7 @@ export default function App() {
                     </h3>
 
                     {/* Original File Info */}
-                    <p className="text-[11px] text-slate-400 mt-1.5 font-mono truncate" title={video.originalFilename}>
+                    <p className="text-[11px] text-slate-400 mt-1.5 font-mono truncate" title={video.currentFilename}>
                       {video.currentFilename || video.originalFilename}
                     </p>
                   </div>
@@ -426,7 +442,7 @@ export default function App() {
                     </button>
 
                     <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-semibold text-slate-600 flex items-center gap-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-600 px-2 py-0.5 rounded-md transition">
+                      <span className="text-[11px] font-semibold text-slate-600 flex items-center gap-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-600 px-2.5 py-1 rounded-md transition">
                         <Play className="w-3 h-3 fill-current text-blue-600" /> Watch
                       </span>
                     </div>
@@ -440,122 +456,149 @@ export default function App() {
 
       </main>
 
-      {/* VIDEO PLAYER MODAL - Auto Play on Click */}
+      {/* FULL-FIT HD VIDEO PLAYER MODAL - Zero Lag & Full Aspect Ratio Support */}
       {selectedVideo && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-2 sm:p-4">
+          <div 
+            className={`bg-slate-900 border border-slate-800 rounded-3xl w-full flex flex-col overflow-hidden shadow-2xl transition-all duration-300 ${
+              isTheaterMode 
+                ? 'max-w-[98vw] h-[96vh]' 
+                : 'max-w-5xl h-[88vh]'
+            }`}
+          >
             
             {/* Modal Header */}
-            <div className="p-4 px-6 border-b border-slate-200 flex items-center justify-between bg-white">
+            <div className="p-3.5 sm:px-6 border-b border-slate-800 flex items-center justify-between bg-slate-950/90 text-white">
               <div className="flex-1 pr-4">
                 <div className="flex items-center gap-2.5">
-                  <h2 className="text-base font-bold text-slate-900 truncate">{selectedVideo.productName}</h2>
-                  {selectedVideo.isRenamed ? (
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                      Identified
-                    </span>
-                  ) : (
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
-                      Needs Name
-                    </span>
-                  )}
+                  <h2 className="text-base font-bold text-white truncate">{selectedVideo.productName}</h2>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    HD Video
+                  </span>
                 </div>
-                <p className="text-xs text-slate-500 font-mono mt-0.5">
-                  {selectedVideo.currentFilename || selectedVideo.originalFilename} • {selectedVideo.sizeMb} MB
+                <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">
+                  {selectedVideo.currentFilename} • {selectedVideo.sizeMb} MB
                 </p>
               </div>
 
+              {/* Top View Controls */}
               <div className="flex items-center gap-2">
+                {/* Fit Mode Toggle: Contain vs Cover */}
+                <button
+                  onClick={() => setVideoFitMode(prev => prev === 'contain' ? 'cover' : 'contain')}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-semibold flex items-center gap-1.5 transition"
+                  title="Toggle Fit to Screen / Full Fill"
+                >
+                  <MoveHorizontal className="w-3.5 h-3.5 text-blue-400" />
+                  <span className="hidden sm:inline">{videoFitMode === 'contain' ? 'Fit Screen' : 'Fill Screen'}</span>
+                </button>
+
+                {/* Theater / Full-Width Toggle */}
+                <button
+                  onClick={() => setIsTheaterMode(prev => !prev)}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                  title={isTheaterMode ? "Standard View" : "Theater Full Page Mode"}
+                >
+                  {isTheaterMode ? <Minimize2 className="w-4 h-4 text-amber-400" /> : <Maximize2 className="w-4 h-4 text-emerald-400" />}
+                </button>
+
+                {/* Rename Button */}
                 <button
                   onClick={() => openRename(selectedVideo)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-sm"
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition shadow-sm"
                 >
                   <Edit3 className="w-3.5 h-3.5" />
-                  <span>Rename</span>
+                  <span className="hidden sm:inline">Rename</span>
                 </button>
+
+                {/* Close Button */}
                 <button
                   onClick={() => setSelectedVideo(null)}
-                  className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
 
-            {/* Video Player Display */}
-            <div className="bg-black flex-1 flex flex-col items-center justify-center relative min-h-[380px] max-h-[520px]">
+            {/* VIDEO DISPLAY CONTAINER WITH AMBIENT BACKDROP */}
+            <div className="flex-1 relative overflow-hidden bg-black flex items-center justify-center">
+              
+              {/* Soft Ambient Blurred Poster in Background (Eliminates harsh black bars for portrait phone videos!) */}
+              <div 
+                className="absolute inset-0 bg-cover bg-center opacity-30 blur-2xl transform scale-110 pointer-events-none"
+                style={{ backgroundImage: `url(${selectedVideo.thumbnailUrl})` }}
+              />
+
+              {/* Native HTML5 Video Player with Multiple High-Speed Streams */}
               <video
+                key={selectedVideo.id}
                 ref={videoRef}
                 controls
                 autoPlay
-                className="max-h-full max-w-full rounded-lg"
-                src={`/api/stream/${selectedVideo.id}`}
+                playsInline
+                preload="auto"
+                className={`relative z-10 w-full h-full transition-all duration-200 ${
+                  videoFitMode === 'cover' ? 'object-cover' : 'object-contain'
+                }`}
                 poster={selectedVideo.thumbnailUrl}
-                onError={() => setVideoError(true)}
               >
-                Your browser does not support HTML5 video playback.
+                {/* 1. Ultra-fast local static route */}
+                <source 
+                  src={`/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}`} 
+                  type="video/mp4" 
+                />
+                {/* 2. Direct byte-range stream */}
+                <source 
+                  src={`/api/stream/${selectedVideo.id}`} 
+                  type="video/mp4" 
+                />
+                Your browser does not support HTML5 video streaming.
               </video>
-
-              {/* Helpful overlay if running on Vercel without local server */}
-              {videoError && (
-                <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center p-6 text-center text-white">
-                  <Film className="w-12 h-12 text-blue-400 mb-3" />
-                  <h4 className="text-base font-bold text-white mb-1">Local HD Video File</h4>
-                  <p className="text-xs text-slate-300 max-w-md mb-4 leading-relaxed">
-                    This product video ({selectedVideo.sizeMb} MB) is stored securely on your local system:
-                    <br />
-                    <code className="text-amber-300 text-[11px] font-mono break-all">{selectedVideo.filePath}</code>
-                  </p>
-                  
-                  <div className="flex flex-wrap items-center justify-center gap-3">
-                    <a
-                      href={`http://localhost:5050/api/stream/${selectedVideo.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-4 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-lg transition"
-                    >
-                      ▶ Play in Local App (Offline Stream)
-                    </a>
-                    
-                    <button
-                      onClick={() => setDriveModalOpen(true)}
-                      className="px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-lg transition"
-                    >
-                      ☁️ Link Google Drive Video
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
 
-            {/* Modal Bottom Strip */}
-            <div className="p-4 px-6 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-4 text-slate-600">
-                <span>Duration: <strong className="text-slate-900">{selectedVideo.durationSec}s</strong></span>
-                <span>Size: <strong className="text-slate-900">{selectedVideo.sizeMb} MB</strong></span>
-                <span>Created: <strong className="text-slate-900">{selectedVideo.createdAt}</strong></span>
+            {/* Modal Bottom Strip with Navigation & Drive Shortcut */}
+            <div className="p-3.5 sm:px-6 bg-slate-950/95 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-white">
+              <div className="flex items-center gap-4 text-slate-300">
+                <span>Duration: <strong className="text-white">{selectedVideo.durationSec}s</strong></span>
+                <span>Size: <strong className="text-white">{selectedVideo.sizeMb} MB</strong></span>
+                <span>Recorded: <strong className="text-white">{selectedVideo.createdAt}</strong></span>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2.5">
+                {/* Google Drive Link */}
+                <a
+                  href={GOOGLE_DRIVE_FOLDER_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 font-semibold flex items-center gap-1.5 transition"
+                >
+                  <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Google Drive Folder</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+
+                {/* Previous Video */}
                 <button
                   onClick={() => {
                     const currentIdx = videos.findIndex(v => v.id === selectedVideo.id);
                     const prevIdx = (currentIdx - 1 + videos.length) % videos.length;
                     handlePlayVideo(videos[prevIdx]);
                   }}
-                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold flex items-center gap-1 shadow-sm"
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold flex items-center gap-1 shadow-sm"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
-                  <span>Previous</span>
+                  <span>Prev</span>
                 </button>
 
+                {/* Next Video */}
                 <button
                   onClick={() => {
                     const currentIdx = videos.findIndex(v => v.id === selectedVideo.id);
                     const nextIdx = (currentIdx + 1) % videos.length;
                     handlePlayVideo(videos[nextIdx]);
                   }}
-                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-1 shadow-sm"
+                  className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold flex items-center gap-1 shadow-sm"
                 >
                   <span>Next Video</span>
                   <ChevronRight className="w-3.5 h-3.5" />
@@ -567,7 +610,7 @@ export default function App() {
         </div>
       )}
 
-      {/* RENAME PRODUCT MODAL - White Theme */}
+      {/* RENAME PRODUCT MODAL */}
       {renameModalOpen && renameTarget && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg p-6 shadow-2xl animate-in fade-in zoom-in-95">
@@ -598,8 +641,8 @@ export default function App() {
                 className="w-20 h-14 object-cover rounded-xl bg-slate-900 border border-slate-200" 
               />
               <div className="overflow-hidden">
-                <p className="text-[11px] font-semibold text-slate-500">Current file:</p>
-                <p className="text-xs font-mono text-slate-800 truncate font-medium">
+                <p className="text-[11px] font-semibold text-slate-500">Current file on disk:</p>
+                <p className="text-xs font-mono text-slate-800 truncate font-semibold">
                   {renameTarget.currentFilename || renameTarget.originalFilename}
                 </p>
               </div>
@@ -680,7 +723,7 @@ export default function App() {
                 {isRenaming ? (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Renaming...</span>
+                    <span>Renaming on disk...</span>
                   </>
                 ) : (
                   <>
@@ -695,7 +738,7 @@ export default function App() {
         </div>
       )}
 
-      {/* UPLOAD NEW VIDEO MODAL - White Theme */}
+      {/* UPLOAD NEW VIDEO MODAL */}
       {uploadModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg p-6 shadow-2xl">
@@ -754,7 +797,7 @@ export default function App() {
                 </label>
                 <input
                   type="url"
-                  placeholder="https://drive.google.com/file/d/..."
+                  placeholder={GOOGLE_DRIVE_FOLDER_URL}
                   value={uploadDriveUrl}
                   onChange={(e) => setUploadDriveUrl(e.target.value)}
                   className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
@@ -792,68 +835,9 @@ export default function App() {
         </div>
       )}
 
-      {/* GOOGLE DRIVE MODAL - White Theme */}
-      {driveModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-xl p-6 shadow-2xl">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-200">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-200">
-                  <HardDrive className="w-5 h-5 text-emerald-600" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-slate-900 text-base">Google Drive Cloud Storage Sync</h3>
-                  <p className="text-xs text-slate-500">Backup & synchronize product videos with Google Drive</p>
-                </div>
-              </div>
-              <button onClick={() => setDriveModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-4 text-xs text-slate-700">
-              <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200">
-                <p className="font-bold text-slate-800 mb-1">📁 Local Videos Folder:</p>
-                <p className="font-mono text-blue-600 break-all font-semibold">C:\Users\NUNES\Desktop\New folder</p>
-                <p className="text-[11px] text-slate-500 mt-1">Total 179 product videos (4.47 GB)</p>
-              </div>
-
-              <div className="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200">
-                <p className="font-bold text-emerald-900 mb-1">☁️ Google Drive Sync Instructions:</p>
-                <ol className="list-decimal list-inside space-y-1.5 text-emerald-800">
-                  <li>Google Drive Desktop app use panni indha videos folder-ah sync pannalaam.</li>
-                  <li>Or `python sync_to_drive.py` script run panni target drive folder-ku copy pannalaam.</li>
-                  <li>Videos rename aana udane, Drive folder-oda link-ah inga save panna mudiyum.</li>
-                </ol>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Google Drive Folder Link:
-                </label>
-                <input
-                  type="url"
-                  placeholder="https://drive.google.com/drive/folders/..."
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
-                />
-              </div>
-            </div>
-
-            <div className="mt-6 pt-4 border-t border-slate-200 flex justify-end">
-              <button
-                onClick={() => setDriveModalOpen(false)}
-                className="px-5 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white px-4 py-4 text-center text-xs text-slate-500 font-medium">
-        <p>Nunes Instruments • Product Video Hub • Live on Vercel</p>
+        <p>Nunes Instruments • Product Video Hub • Local Stream: http://localhost:5050 • Vercel: nunes-product-videos.vercel.app</p>
       </footer>
     </div>
   );
