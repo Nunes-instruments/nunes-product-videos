@@ -1,0 +1,177 @@
+[
+  {
+    "name": "Aggregate Impact Testing Machine",
+    "category": "Civil Construction Instruments",
+    "brand": "Aimil",
+    "model": "AIM-456",
+    "fullName": "Aggregate Impact Testing Machine Aimil AIM-456"
+  },
+  {
+    "name": "Analytical Balance",
+    "category": "Laboratory Instruments",
+    "brand": "Ohaus",
+    "model": "PR224",
+    "fullName": "Analytical Balance Ohaus PR224"
+  },
+  {
+    "name": "Bench Top pH Meter",
+    "category": "Laboratory Instruments",
+    "brand": "Hanna",
+    "model": "HI5221",
+    "fullName": "Bench Top pH Meter Hanna HI5221"
+  },
+  {
+    "name": "Bitumen Penetrometer",
+    "category": "Civil Construction Instruments",
+    "brand": "Aimil",
+    "model": "BP-01",
+    "fullName": "Bitumen Penetrometer Aimil BP-01"
+  },
+  {
+    "name": "Digital Bench pH Meter",
+    "category": "Laboratory Instruments",
+    "brand": "Eutech",
+    "model": "PH2700",
+    "fullName": "Digital Bench pH Meter Eutech PH2700"
+  },
+  {
+    "name": "Digital Dissolved Oxygen Meter",
+    "category": "Laboratory Instruments",
+    "brand": "Eutech",
+    "model": "DO700",
+    "fullName": "Digital Dissolved Oxygen Meter Eutech DO700"
+  },
+  {
+    "name": "Digital Dissolved Oxygen Meter",
+    "category": "Laboratory Instruments",
+    "brand": "Eutech",
+    "model": "",
+    "fullName": "Digital Dissolved Oxygen Meter Eutech"
+  },
+  {
+    "name": "Digital Multiparameter Water Quality Meter",
+    "category": "Laboratory Instruments",
+    "brand": "Hanna",
+    "model": "HI9829",
+    "fullName": "Digital Multiparameter Water Quality Meter Hanna HI9829"
+  },
+  {
+    "name": "Digital ORP Meter",
+    "category": "Laboratory Instruments",
+    "brand": "Hanna",
+    "model": "HI2002",
+    "fullName": "Digital ORP Meter Hanna HI2002"
+  },
+  {
+    "name": "Digital Turbidity Meter",
+    "category": "Laboratory Instruments",
+    "brand": "Hanna",
+    "model": "HI98703",
+    "fullName": "Digital Turbidity Meter Hanna HI98703"
+  },
+  {
+    "name": "Digital pH Meter",
+    "category": "Laboratory Instruments",
+    "brand": "Eutech",
+    "model": "PH700",
+    "fullName": "Digital pH Meter Eutech PH700"
+  },
+  {
+    "name": "Exhaust Gas Analyser",
+    "category": "GAS TESTING & ANALYSER",
+    "brand": "",
+    "model": "",
+    "fullName": "Exhaust Gas Analyser"
+  },
+  {
+    "name": "Flue Gas Analyser",
+    "category": "GAS TESTING & ANALYSER",
+    "brand": "",
+    "model": "",
+    "fullName": "Flue Gas Analyser"
+  },
+  {
+    "name": "Gas Leak Detector",
+    "category": "GAS TESTING & ANALYSER",
+    "brand": "",
+    "model": "",
+    "fullName": "Gas Leak Detector"
+  },
+  {
+    "name": "Laboratory Hot Plate",
+    "category": "Laboratory Instruments",
+    "brand": "Remi",
+    "model": "1MLH",
+    "fullName": "Laboratory Hot Plate Remi 1MLH"
+  },
+  {
+    "name": "Laboratory Incubator",
+    "category": "Laboratory Instruments",
+    "brand": "Tempo",
+    "model": "TI-18",
+    "fullName": "Laboratory Incubator Tempo TI-18"
+  },
+  {
+    "name": "Los Angeles Abrasion Testing Machine",
+    "category": "Civil Construction Instruments",
+    "brand": "Aimil",
+    "model": "AIM-458",
+    "fullName": "Los Angeles Abrasion Testing Machine Aimil AIM-458"
+  },
+  {
+    "name": "Methane Gas Analyser",
+    "category": "GAS TESTING & ANALYSER",
+    "brand": "",
+    "model": "",
+    "fullName": "Methane Gas Analyser"
+  },
+  {
+    "name": "PH",
+    "category": "Civil Construction Instruments",
+    "brand": "meter",
+    "model": "",
+    "fullName": "PH meter"
+  },
+  {
+    "name": "PH Meter",
+    "category": "LABORATORY TESTING & MEASURING",
+    "brand": "",
+    "model": "",
+    "fullName": "PH Meter"
+  },
+  {
+    "name": "Ph",
+    "category": "Laboratory Instruments",
+    "brand": "med",
+    "model": "46eeg7",
+    "fullName": "Ph med 46eeg7"
+  },
+  {
+    "name": "Portable Vibration Analyzer",
+    "category": "Industrial Instruments",
+    "brand": "Metravi",
+    "model": "VB-8205",
+    "fullName": "Portable Vibration Analyzer Metravi VB-8205"
+  },
+  {
+    "name": "Soil Compaction Test Apparatus",
+    "category": "Civil Construction Instruments",
+    "brand": "Aimil",
+    "model": "SCT-01",
+    "fullName": "Soil Compaction Test Apparatus Aimil SCT-01"
+  },
+  {
+    "name": "THERMOMETER",
+    "category": "Civil Construction Instruments",
+    "brand": "HENNA",
+    "model": "PS1082",
+    "fullName": "THERMOMETER HENNA PS1082"
+  },
+  {
+    "name": "Turbidity Meter",
+    "category": "Laboratory Instruments",
+    "brand": "Hanna",
+    "model": "HI98703",
+    "fullName": "Turbidity Meter Hanna HI98703"
+  }
+]
