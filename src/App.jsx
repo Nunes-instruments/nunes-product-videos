@@ -4,10 +4,11 @@ import {
   ExternalLink, HardDrive, Sparkles, X, Filter, FolderUp, 
   ChevronRight, ChevronLeft, RefreshCw, Eye, Tag, AlertCircle,
   Download, Volume2, Info, Maximize2, Minimize2, MoveHorizontal,
-  Smartphone, Monitor, Copy, Check, Radio
+  Smartphone, Monitor, Copy, Check, Radio, Settings
 } from 'lucide-react';
 
 const GOOGLE_DRIVE_FOLDER_URL = "https://drive.google.com/drive/u/0/folders/1-vhkY7WfIHVwRlFarYooSwooWwnBWf94";
+const DEFAULT_STREAM_SERVER = "https://mortgage-adam-enhancements-univ.trycloudflare.com";
 
 export default function App() {
   const [videos, setVideos] = useState([]);
@@ -19,6 +20,7 @@ export default function App() {
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [driveModalOpen, setDriveModalOpen] = useState(false);
+  const [streamSettingsOpen, setStreamSettingsOpen] = useState(false);
 
   // Video player controls
   const [videoFitMode, setVideoFitMode] = useState('cover'); // 'cover' fills 100%, 'contain' fits with aspect
@@ -27,6 +29,51 @@ export default function App() {
   const videoRef = useRef(null);
 
   const isLocalHost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+  // Live streaming edge tunnel endpoint
+  const [streamServerUrl, setStreamServerUrl] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('nunes_stream_url') || DEFAULT_STREAM_SERVER;
+    }
+    return DEFAULT_STREAM_SERVER;
+  });
+  const [customStreamInput, setCustomStreamInput] = useState(streamServerUrl);
+  const [streamConnected, setStreamConnected] = useState(true);
+
+  // Check live stream connectivity
+  useEffect(() => {
+    const checkStream = async () => {
+      try {
+        const endpoint = isLocalHost ? '/api/videos' : `${streamServerUrl}/api/videos`;
+        const res = await fetch(endpoint);
+        setStreamConnected(res.ok);
+      } catch {
+        setStreamConnected(false);
+      }
+    };
+    checkStream();
+  }, [streamServerUrl, isLocalHost]);
+
+  // Fullscreen toggle handler
+  const toggleFullScreen = () => {
+    try {
+      if (!document.fullscreenElement) {
+        if (videoRef.current) {
+          if (videoRef.current.requestFullscreen) {
+            videoRef.current.requestFullscreen();
+          } else if (videoRef.current.webkitRequestFullscreen) {
+            videoRef.current.webkitRequestFullscreen();
+          }
+        }
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        }
+      }
+    } catch (e) {
+      console.warn('Fullscreen error:', e);
+    }
+  };
 
   // Rename modal states
   const [renameTarget, setRenameTarget] = useState(null);
@@ -46,7 +93,8 @@ export default function App() {
       setLoading(true);
       let loadedVideos = [];
       try {
-        const res = await fetch('/api/videos');
+        const endpoint = isLocalHost ? '/api/videos' : `${streamServerUrl}/api/videos`;
+        const res = await fetch(endpoint);
         if (res.ok) {
           const data = await res.json();
           loadedVideos = data.videos || [];
@@ -125,7 +173,8 @@ export default function App() {
     if (!newTitle.trim() || !renameTarget) return;
     setIsRenaming(true);
     try {
-      const res = await fetch('/api/rename', {
+      const endpoint = isLocalHost ? '/api/rename' : `${streamServerUrl}/api/rename`;
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -176,7 +225,8 @@ export default function App() {
     formData.append('driveUrl', uploadDriveUrl);
 
     try {
-      const res = await fetch('/api/upload', {
+      const endpoint = isLocalHost ? '/api/upload' : `${streamServerUrl}/api/upload`;
+      const res = await fetch(endpoint, {
         method: 'POST',
         body: formData
       });
@@ -189,7 +239,7 @@ export default function App() {
         setUploadProductName('');
         setUploadDriveUrl('');
       } else {
-        alert('Server upload error. Make sure local server is running.');
+        alert('Server upload error. Make sure local stream server is running.');
       }
     } catch (err) {
       alert('Upload failed: ' + err.message);
@@ -209,16 +259,23 @@ export default function App() {
         <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white text-xs px-4 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 shadow-sm">
           <div className="flex items-center gap-2">
             <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-            <span><strong>Live Vercel Cloud Mode:</strong> Renamed product catalog & thumbnails are 100% synced with Google Drive.</span>
+            <span><strong>Live Vercel Stream:</strong> {streamConnected ? '🟢 Direct High-Speed Video Stream Active' : '🟡 Stream Tunnel Offline (Click to configure)'}</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            <button 
+              onClick={() => { setCustomStreamInput(streamServerUrl); setStreamSettingsOpen(true); }}
+              className="bg-white/20 hover:bg-white/30 text-white font-bold px-2.5 py-0.5 rounded-lg text-[11px] transition flex items-center gap-1"
+            >
+              <Settings className="w-3 h-3" />
+              <span>Stream Settings</span>
+            </button>
             <a 
               href="http://localhost:5050" 
               target="_blank" 
               rel="noreferrer" 
               className="bg-white/20 hover:bg-white/30 text-white font-bold px-2.5 py-0.5 rounded-lg text-[11px] transition"
             >
-              ⚡ Switch to Local Direct Stream (localhost:5050)
+              ⚡ Localhost:5050
             </a>
             <a 
               href={GOOGLE_DRIVE_FOLDER_URL} 
@@ -258,7 +315,7 @@ export default function App() {
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input 
-                type="text"
+                type="text" 
                 placeholder="Search products: Gas Detector, Sieve Shaker, pH Meter, Oven, Caliper..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -276,7 +333,22 @@ export default function App() {
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2 sm:gap-2.5">
+            {/* Live Stream Status Badge */}
+            <button
+              onClick={() => { setCustomStreamInput(streamServerUrl); setStreamSettingsOpen(true); }}
+              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl border transition shadow-sm ${
+                streamConnected 
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100' 
+                  : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+              }`}
+              title="Stream Server Status & Settings"
+            >
+              <span className={`w-2 h-2 rounded-full ${streamConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+              <span className="hidden sm:inline">Stream:</span>
+              <span>{streamConnected ? 'HD Live' : 'Offline'}</span>
+            </button>
+
             {/* Google Drive Link Button */}
             <a
               href={GOOGLE_DRIVE_FOLDER_URL}
@@ -286,7 +358,7 @@ export default function App() {
               title="Open Google Drive Cloud Folder"
             >
               <HardDrive className="w-4 h-4 text-emerald-600" />
-              <span>Google Drive</span>
+              <span className="hidden md:inline">Google Drive</span>
               <ExternalLink className="w-3 h-3 text-emerald-600 ml-0.5" />
             </a>
 
@@ -295,7 +367,7 @@ export default function App() {
               className="flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-600/25 transition transform active:scale-95"
             >
               <Upload className="w-4 h-4" />
-              <span>Add New Video</span>
+              <span className="hidden sm:inline">Add Video</span>
             </button>
           </div>
 
@@ -517,6 +589,16 @@ export default function App() {
 
               {/* View Controls */}
               <div className="flex items-center gap-1.5 sm:gap-2">
+                {/* True Fullscreen Toggle */}
+                <button
+                  onClick={toggleFullScreen}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-semibold flex items-center gap-1.5 transition"
+                  title="Full Screen (Entire Screen)"
+                >
+                  <Maximize2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-[11px] hidden sm:inline">Fullscreen</span>
+                </button>
+
                 {/* Fit Mode Toggle: Fill 100% vs Fit Aspect */}
                 <button
                   onClick={() => setVideoFitMode(prev => prev === 'contain' ? 'cover' : 'contain')}
@@ -524,7 +606,7 @@ export default function App() {
                   title="Toggle Full Fit (Corner to Corner) vs Aspect Fit"
                 >
                   <MoveHorizontal className="w-3.5 h-3.5 text-blue-400" />
-                  <span className="text-[11px]">{videoFitMode === 'cover' ? 'Full Fill (100%)' : 'Fit Screen'}</span>
+                  <span className="text-[11px]">{videoFitMode === 'cover' ? 'Full Fill' : 'Fit Screen'}</span>
                 </button>
 
                 {/* Theater Mode Toggle */}
@@ -533,7 +615,7 @@ export default function App() {
                   className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
                   title={isTheaterMode ? "Exit Theater Mode" : "Expand to Full Page Theater Mode"}
                 >
-                  {isTheaterMode ? <Minimize2 className="w-4 h-4 text-amber-400" /> : <Maximize2 className="w-4 h-4 text-emerald-400" />}
+                  {isTheaterMode ? <Minimize2 className="w-4 h-4 text-amber-400" /> : <Monitor className="w-4 h-4 text-blue-400" />}
                 </button>
 
                 {/* Rename Button */}
@@ -578,14 +660,19 @@ export default function App() {
                 }`}
                 poster={selectedVideo.thumbnailUrl}
               >
-                {/* 1. Ultra-fast local static route */}
+                {/* 1. Primary Live Edge Stream URL (Live Vercel via Cloudflare Edge / Localhost) */}
                 <source 
-                  src={`/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}`} 
+                  src={isLocalHost ? `/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}` : `${streamServerUrl}/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}`} 
                   type="video/mp4" 
                 />
-                {/* 2. Direct byte-range stream */}
+                {/* 2. Direct byte-range stream via tunnel */}
                 <source 
-                  src={`/api/stream/${selectedVideo.id}`} 
+                  src={isLocalHost ? `/api/stream/${selectedVideo.id}` : `${streamServerUrl}/api/stream/${selectedVideo.id}`} 
+                  type="video/mp4" 
+                />
+                {/* 3. Static relative fallback */}
+                <source 
+                  src={`/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}`} 
                   type="video/mp4" 
                 />
                 Your browser does not support HTML5 video streaming.
@@ -599,10 +686,18 @@ export default function App() {
                     {selectedVideo.productName}
                   </h4>
                   <p className="text-xs text-slate-300 max-w-md mb-4 leading-relaxed">
-                    This HD video file ({selectedVideo.sizeMb} MB) is saved on your system disk and synced with Google Drive.
+                    This HD video file ({selectedVideo.sizeMb} MB) is streaming from your system.
                   </p>
                   
                   <div className="flex flex-wrap items-center justify-center gap-3">
+                    <button
+                      onClick={() => setStreamSettingsOpen(true)}
+                      className="px-4 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-lg flex items-center gap-1.5 transition"
+                    >
+                      <Settings className="w-4 h-4" />
+                      <span>Check Stream Server</span>
+                    </button>
+
                     <a
                       href={GOOGLE_DRIVE_FOLDER_URL}
                       target="_blank"
@@ -610,7 +705,7 @@ export default function App() {
                       className="px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-lg flex items-center gap-1.5 transition"
                     >
                       <HardDrive className="w-4 h-4" />
-                      <span>Watch in Google Drive Folder</span>
+                      <span>Watch in Google Drive</span>
                       <ExternalLink className="w-3.5 h-3.5" />
                     </a>
 
@@ -618,9 +713,9 @@ export default function App() {
                       href={`http://localhost:5050`}
                       target="_blank"
                       rel="noreferrer"
-                      className="px-4 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-lg transition"
+                      className="px-4 py-2 text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white rounded-xl shadow-lg transition"
                     >
-                      ⚡ Open Local App (Instant Stream)
+                      ⚡ Open Localhost
                     </a>
                   </div>
                 </div>
@@ -901,6 +996,112 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* LIVE STREAM SETTINGS MODAL */}
+      {streamSettingsOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+                  <Radio className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-slate-900">Live Video Stream Settings</h3>
+                  <p className="text-xs text-slate-500">Connects live Vercel to your system's 4.5 GB video library</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setStreamSettingsOpen(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="py-4 space-y-4 text-xs text-slate-600">
+              <div className="flex items-center gap-2.5 p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+                <span className={`w-3 h-3 rounded-full flex-shrink-0 ${streamConnected ? 'bg-emerald-500 animate-ping' : 'bg-amber-500'}`} />
+                <div>
+                  <p className="font-bold text-slate-800 text-sm">
+                    Status: {streamConnected ? '🟢 Connected & Streaming Active' : '🟡 Disconnected / Check Cloudflare Tunnel'}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {streamConnected 
+                      ? 'Videos will stream at full speed directly from your disk on Vercel.' 
+                      : 'Ensure server and cloudflared tunnel are running on your computer.'}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-800 block mb-1.5">
+                  Stream Tunnel URL (Cloudflare Edge):
+                </label>
+                <input 
+                  type="text" 
+                  value={customStreamInput} 
+                  onChange={(e) => setCustomStreamInput(e.target.value)}
+                  className="w-full bg-slate-50 focus:bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 transition"
+                  placeholder="https://...trycloudflare.com"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Default: <span className="font-mono text-slate-600">{DEFAULT_STREAM_SERVER}</span>
+                </p>
+              </div>
+
+              <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-3 text-[11px] text-blue-900 leading-relaxed">
+                <p className="font-bold mb-1">💡 How Live Playback Works:</p>
+                <p>1. 179 HD videos (4.5 GB) stay safely stored on your local disk.</p>
+                <p>2. High-speed Cloudflare tunnel securely streams the MP4 video data to Vercel users.</p>
+                <p>3. If you ever restart the tunnel, paste the new URL here and click Save!</p>
+              </div>
+
+              <div className="pt-2 flex items-center justify-between">
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setCustomStreamInput(DEFAULT_STREAM_SERVER);
+                    setStreamServerUrl(DEFAULT_STREAM_SERVER);
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem('nunes_stream_url', DEFAULT_STREAM_SERVER);
+                    }
+                  }}
+                  className="text-slate-500 hover:text-slate-800 underline text-xs font-semibold"
+                >
+                  Reset to Default
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button 
+                    type="button"
+                    onClick={() => setStreamSettingsOpen(false)}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
+                  >
+                    Close
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      const trimmed = customStreamInput.trim();
+                      if (trimmed) {
+                        setStreamServerUrl(trimmed);
+                        if (typeof window !== 'undefined') {
+                          localStorage.setItem('nunes_stream_url', trimmed);
+                        }
+                        setStreamSettingsOpen(false);
+                      }
+                    }}
+                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-md transition"
+                  >
+                    Save & Reconnect
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
