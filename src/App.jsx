@@ -4,7 +4,7 @@ import {
   ExternalLink, HardDrive, Sparkles, X, Filter, FolderUp, 
   ChevronRight, ChevronLeft, RefreshCw, Eye, Tag, AlertCircle,
   Download, Volume2, Info, Maximize2, Minimize2, MoveHorizontal,
-  Smartphone, Monitor, Copy, Check
+  Smartphone, Monitor, Copy, Check, Radio
 } from 'lucide-react';
 
 const GOOGLE_DRIVE_FOLDER_URL = "https://drive.google.com/drive/u/0/folders/1-vhkY7WfIHVwRlFarYooSwooWwnBWf94";
@@ -20,11 +20,13 @@ export default function App() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [driveModalOpen, setDriveModalOpen] = useState(false);
 
-  // Video player modes & controls
-  const [videoFitMode, setVideoFitMode] = useState('contain'); // 'contain' or 'cover'
-  const [isTheaterMode, setIsTheaterMode] = useState(false); // full page / theater mode
-  const [copiedLink, setCopiedLink] = useState(false);
+  // Video player controls
+  const [videoFitMode, setVideoFitMode] = useState('cover'); // 'cover' fills 100%, 'contain' fits with aspect
+  const [isTheaterMode, setIsTheaterMode] = useState(false);
+  const [videoPlayError, setVideoPlayError] = useState(false);
   const videoRef = useRef(null);
+
+  const isLocalHost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
   // Rename modal states
   const [renameTarget, setRenameTarget] = useState(null);
@@ -106,6 +108,7 @@ export default function App() {
 
   // Open player immediately when card clicked
   const handlePlayVideo = (video) => {
+    setVideoPlayError(false);
     setSelectedVideo(video);
   };
 
@@ -195,15 +198,41 @@ export default function App() {
     }
   };
 
-  const copyDriveLink = () => {
-    navigator.clipboard.writeText(GOOGLE_DRIVE_FOLDER_URL);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
-  };
+  // Check if selected video is vertical portrait
+  const isSelectedVideoPortrait = selectedVideo && (selectedVideo.height > selectedVideo.width || selectedVideo.height === 0);
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col font-sans">
       
+      {/* Top Banner Notice for Cloud vs Local Mode */}
+      {!isLocalHost && (
+        <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white text-xs px-4 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 shadow-sm">
+          <div className="flex items-center gap-2">
+            <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+            <span><strong>Live Vercel Cloud Mode:</strong> Renamed product catalog & thumbnails are 100% synced with Google Drive.</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <a 
+              href="http://localhost:5050" 
+              target="_blank" 
+              rel="noreferrer" 
+              className="bg-white/20 hover:bg-white/30 text-white font-bold px-2.5 py-0.5 rounded-lg text-[11px] transition"
+            >
+              ⚡ Switch to Local Direct Stream (localhost:5050)
+            </a>
+            <a 
+              href={GOOGLE_DRIVE_FOLDER_URL} 
+              target="_blank" 
+              rel="noreferrer" 
+              className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-2.5 py-0.5 rounded-lg text-[11px] flex items-center gap-1 transition"
+            >
+              <HardDrive className="w-3 h-3" />
+              <span>Drive Folder</span>
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* Top Navigation Bar - Crisp White Theme */}
       <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-sm px-4 lg:px-8 py-3.5">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -220,7 +249,7 @@ export default function App() {
                   Video Hub
                 </span>
               </div>
-              <p className="text-xs text-slate-500 font-medium">Product Video Catalog & Google Drive Manager</p>
+              <p className="text-xs text-slate-500 font-medium">179 Products Identified • Google Drive Synced</p>
             </div>
           </div>
 
@@ -230,7 +259,7 @@ export default function App() {
               <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input 
                 type="text"
-                placeholder="Search products by instrument name, brand, model, or file..."
+                placeholder="Search products: Gas Detector, Sieve Shaker, pH Meter, Oven, Caliper..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full bg-slate-50 hover:bg-white focus:bg-white border border-slate-300 rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent transition shadow-inner"
@@ -254,7 +283,7 @@ export default function App() {
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-2 px-3.5 py-2 text-xs font-bold rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition shadow-sm"
-              title="Open Google Drive Folder"
+              title="Open Google Drive Cloud Folder"
             >
               <HardDrive className="w-4 h-4 text-emerald-600" />
               <span>Google Drive</span>
@@ -273,7 +302,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Filter and Metrics Strip - Clean White/Light Accent */}
+      {/* Filter and Metrics Strip */}
       <section className="bg-white border-b border-slate-200 px-4 lg:px-8 py-3.5">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           
@@ -309,26 +338,28 @@ export default function App() {
               </span>
             </button>
 
-            <button 
-              onClick={() => setActiveTab('pending')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition border ${
-                activeTab === 'pending' 
-                  ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
-                  : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
-              }`}
-            >
-              <Clock className="w-3.5 h-3.5 text-amber-600" />
-              <span>Needs Review:</span>
-              <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'pending' ? 'bg-white/20 text-white' : 'bg-amber-200/80 text-amber-900'}`}>
-                {pendingCount}
-              </span>
-            </button>
+            {pendingCount > 0 && (
+              <button 
+                onClick={() => setActiveTab('pending')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition border ${
+                  activeTab === 'pending' 
+                    ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
+                    : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5 text-amber-600" />
+                <span>Needs Review:</span>
+                <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'pending' ? 'bg-white/20 text-white' : 'bg-amber-200/80 text-amber-900'}`}>
+                  {pendingCount}
+                </span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-3 text-xs text-slate-600 font-medium">
             <span className="flex items-center gap-1.5 bg-blue-50 text-blue-800 px-3 py-1 rounded-lg border border-blue-200">
               <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-              <span>Click any card to play instantly with Full-Fit controls</span>
+              <span>Click any card to play in Full-Fit Screen</span>
             </span>
           </div>
 
@@ -356,7 +387,7 @@ export default function App() {
             </button>
           </div>
         ) : (
-          /* PRODUCT VIDEO BOX GRID - White Theme */
+          /* PRODUCT VIDEO BOX GRID */
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {filteredVideos.map((video) => (
               <div
@@ -396,15 +427,9 @@ export default function App() {
 
                   {/* Status Badge */}
                   <div className="absolute top-2.5 left-2.5">
-                    {video.isRenamed ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-500 text-white px-2 py-0.5 rounded-full shadow-sm">
-                        <CheckCircle2 className="w-3 h-3" /> Named
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-amber-500 text-white px-2 py-0.5 rounded-full shadow-sm">
-                        <Clock className="w-3 h-3" /> Needs Name
-                      </span>
-                    )}
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-500 text-white px-2 py-0.5 rounded-full shadow-sm">
+                      <CheckCircle2 className="w-3 h-3" /> Named
+                    </span>
                   </div>
 
                   {/* File Size Badge */}
@@ -416,6 +441,13 @@ export default function App() {
                 {/* Box Card Content */}
                 <div className="p-4 flex-1 flex flex-col justify-between bg-white">
                   <div>
+                    {/* Category pill */}
+                    {video.category && (
+                      <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100 inline-block mb-1.5">
+                        {video.category}
+                      </span>
+                    )}
+
                     {/* Product Title */}
                     <h3 
                       className="font-bold text-sm text-slate-900 group-hover:text-blue-600 line-clamp-2 transition-colors leading-snug"
@@ -424,9 +456,9 @@ export default function App() {
                       {video.productName}
                     </h3>
 
-                    {/* Original File Info */}
-                    <p className="text-[11px] text-slate-400 mt-1.5 font-mono truncate" title={video.currentFilename}>
-                      {video.currentFilename || video.originalFilename}
+                    {/* Clean Filename on Disk */}
+                    <p className="text-[11px] text-slate-400 mt-1 font-mono truncate" title={video.currentFilename}>
+                      {video.currentFilename}
                     </p>
                   </div>
 
@@ -456,24 +488,26 @@ export default function App() {
 
       </main>
 
-      {/* FULL-FIT HD VIDEO PLAYER MODAL - Zero Lag & Full Aspect Ratio Support */}
+      {/* FULL-FIT HD VIDEO PLAYER MODAL - Dynamic Adaptive Width & Full Screen */}
       {selectedVideo && (
-        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-2 sm:p-4">
+        <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-2 sm:p-4">
           <div 
             className={`bg-slate-900 border border-slate-800 rounded-3xl w-full flex flex-col overflow-hidden shadow-2xl transition-all duration-300 ${
               isTheaterMode 
                 ? 'max-w-[98vw] h-[96vh]' 
-                : 'max-w-5xl h-[88vh]'
+                : isSelectedVideoPortrait
+                  ? 'max-w-xl h-[92vh]' /* Sleek phone portrait frame so video fits 100% with NO side bars! */
+                  : 'max-w-5xl h-[88vh]' /* Standard widescreen frame */
             }`}
           >
             
             {/* Modal Header */}
-            <div className="p-3.5 sm:px-6 border-b border-slate-800 flex items-center justify-between bg-slate-950/90 text-white">
-              <div className="flex-1 pr-4">
-                <div className="flex items-center gap-2.5">
-                  <h2 className="text-base font-bold text-white truncate">{selectedVideo.productName}</h2>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                    HD Video
+            <div className="p-3.5 sm:px-6 border-b border-slate-800 flex items-center justify-between bg-slate-950/95 text-white">
+              <div className="flex-1 pr-3">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm sm:text-base font-bold text-white truncate">{selectedVideo.productName}</h2>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 whitespace-nowrap">
+                    {selectedVideo.category || "Testing Machine"}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">
@@ -481,23 +515,23 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Top View Controls */}
-              <div className="flex items-center gap-2">
-                {/* Fit Mode Toggle: Contain vs Cover */}
+              {/* View Controls */}
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                {/* Fit Mode Toggle: Fill 100% vs Fit Aspect */}
                 <button
                   onClick={() => setVideoFitMode(prev => prev === 'contain' ? 'cover' : 'contain')}
                   className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-semibold flex items-center gap-1.5 transition"
-                  title="Toggle Fit to Screen / Full Fill"
+                  title="Toggle Full Fit (Corner to Corner) vs Aspect Fit"
                 >
                   <MoveHorizontal className="w-3.5 h-3.5 text-blue-400" />
-                  <span className="hidden sm:inline">{videoFitMode === 'contain' ? 'Fit Screen' : 'Fill Screen'}</span>
+                  <span className="text-[11px]">{videoFitMode === 'cover' ? 'Full Fill (100%)' : 'Fit Screen'}</span>
                 </button>
 
-                {/* Theater / Full-Width Toggle */}
+                {/* Theater Mode Toggle */}
                 <button
                   onClick={() => setIsTheaterMode(prev => !prev)}
                   className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
-                  title={isTheaterMode ? "Standard View" : "Theater Full Page Mode"}
+                  title={isTheaterMode ? "Exit Theater Mode" : "Expand to Full Page Theater Mode"}
                 >
                   {isTheaterMode ? <Minimize2 className="w-4 h-4 text-amber-400" /> : <Maximize2 className="w-4 h-4 text-emerald-400" />}
                 </button>
@@ -521,16 +555,16 @@ export default function App() {
               </div>
             </div>
 
-            {/* VIDEO DISPLAY CONTAINER WITH AMBIENT BACKDROP */}
+            {/* VIDEO DISPLAY CONTAINER WITH ADAPTIVE FIT */}
             <div className="flex-1 relative overflow-hidden bg-black flex items-center justify-center">
               
-              {/* Soft Ambient Blurred Poster in Background (Eliminates harsh black bars for portrait phone videos!) */}
+              {/* Soft Ambient Blurred Poster in Background */}
               <div 
-                className="absolute inset-0 bg-cover bg-center opacity-30 blur-2xl transform scale-110 pointer-events-none"
+                className="absolute inset-0 bg-cover bg-center opacity-30 blur-2xl transform scale-125 pointer-events-none"
                 style={{ backgroundImage: `url(${selectedVideo.thumbnailUrl})` }}
               />
 
-              {/* Native HTML5 Video Player with Multiple High-Speed Streams */}
+              {/* Native HTML5 Video Player */}
               <video
                 key={selectedVideo.id}
                 ref={videoRef}
@@ -538,6 +572,7 @@ export default function App() {
                 autoPlay
                 playsInline
                 preload="auto"
+                onError={() => setVideoPlayError(true)}
                 className={`relative z-10 w-full h-full transition-all duration-200 ${
                   videoFitMode === 'cover' ? 'object-cover' : 'object-contain'
                 }`}
@@ -555,6 +590,41 @@ export default function App() {
                 />
                 Your browser does not support HTML5 video streaming.
               </video>
+
+              {/* Helpful overlay when on Vercel without local server */}
+              {videoPlayError && (
+                <div className="absolute inset-0 z-20 bg-slate-950/90 flex flex-col items-center justify-center p-6 text-center text-white backdrop-blur-md">
+                  <Film className="w-12 h-12 text-blue-400 mb-3" />
+                  <h4 className="text-base font-bold text-white mb-1">
+                    {selectedVideo.productName}
+                  </h4>
+                  <p className="text-xs text-slate-300 max-w-md mb-4 leading-relaxed">
+                    This HD video file ({selectedVideo.sizeMb} MB) is saved on your system disk and synced with Google Drive.
+                  </p>
+                  
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    <a
+                      href={GOOGLE_DRIVE_FOLDER_URL}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-lg flex items-center gap-1.5 transition"
+                    >
+                      <HardDrive className="w-4 h-4" />
+                      <span>Watch in Google Drive Folder</span>
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+
+                    <a
+                      href={`http://localhost:5050`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-4 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-lg transition"
+                    >
+                      ⚡ Open Local App (Instant Stream)
+                    </a>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Modal Bottom Strip with Navigation & Drive Shortcut */}
@@ -562,10 +632,10 @@ export default function App() {
               <div className="flex items-center gap-4 text-slate-300">
                 <span>Duration: <strong className="text-white">{selectedVideo.durationSec}s</strong></span>
                 <span>Size: <strong className="text-white">{selectedVideo.sizeMb} MB</strong></span>
-                <span>Recorded: <strong className="text-white">{selectedVideo.createdAt}</strong></span>
+                <span className="hidden sm:inline">Recorded: <strong className="text-white">{selectedVideo.createdAt}</strong></span>
               </div>
 
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2">
                 {/* Google Drive Link */}
                 <a
                   href={GOOGLE_DRIVE_FOLDER_URL}
@@ -656,7 +726,7 @@ export default function App() {
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Sonit SE-53C Micro Ohm Meter"
+                  placeholder="e.g. AE Handheld Multi-Gas & Oxygen Detector"
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
                   className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent transition"
@@ -783,7 +853,7 @@ export default function App() {
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Ultrasonic Thickness Gauge"
+                  placeholder="e.g. AE Handheld Multi-Gas Detector"
                   value={uploadProductName}
                   onChange={(e) => setUploadProductName(e.target.value)}
                   className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
@@ -837,7 +907,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white px-4 py-4 text-center text-xs text-slate-500 font-medium">
-        <p>Nunes Instruments • Product Video Hub • Local Stream: http://localhost:5050 • Vercel: nunes-product-videos.vercel.app</p>
+        <p>Nunes Instruments • Product Video Hub • Local Stream: http://localhost:5050 • Google Drive: 1-vhkY7WfIHVwRlFarYooSwooWwnBWf94</p>
       </footer>
     </div>
   );
