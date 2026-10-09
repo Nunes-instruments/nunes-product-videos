@@ -1,6 +1,22 @@
 {
   "rewrites": [
     {
+      "source": "/api/drive/status",
+      "destination": "/api/drive-status"
+    },
+    {
+      "source": "/api/drive/auth-url",
+      "destination": "/api/drive-auth"
+    },
+    {
+      "source": "/api/drive/test-connection",
+      "destination": "/api/drive-auth"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

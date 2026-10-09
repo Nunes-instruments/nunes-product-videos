@@ -285,21 +285,6 @@
     "createdAt": "2026-04-06 16:11:56"
   },
   {
-    "id": "photo_vid_020",
-    "originalFilename": "vid_020.jpg",
-    "currentFilename": "Acto-Photometer Activity Cage Apparatus.jpg",
-    "productName": "Acto-Photometer Activity Cage Apparatus",
-    "isRenamed": true,
-    "imageUrl": "/photos/vid_020.jpg",
-    "filePath": "C:\\Users\\NUNES\\Desktop\\Product Photos\\Acto-Photometer Activity Cage Apparatus.jpg",
-    "sizeMb": 0.03,
-    "category": "Pharmacology",
-    "width": 848,
-    "height": 478,
-    "driveUrl": "",
-    "createdAt": "2026-04-06 16:11:57"
-  },
-  {
     "id": "photo_vid_021",
     "originalFilename": "vid_021.jpg",
     "currentFilename": "Nunes Digital Rota Rod Apparatus.jpg",
@@ -1292,11 +1277,11 @@
   {
     "id": "photo_vid_087",
     "originalFilename": "vid_087.jpg",
-    "currentFilename": "Hydraulic Pressure Gauge Tester 0-14 kg_cm\u00b2.jpg",
-    "productName": "Hydraulic Pressure Gauge Tester 0-14 kg/cm\u00b2",
+    "currentFilename": "Hydraulic Pressure Gauge Tester 0-14 kg_cm².jpg",
+    "productName": "Hydraulic Pressure Gauge Tester 0-14 kg/cm²",
     "isRenamed": true,
     "imageUrl": "/photos/vid_087.jpg",
-    "filePath": "C:\\Users\\NUNES\\Desktop\\Product Photos\\Hydraulic Pressure Gauge Tester 0-14 kg_cm\u00b2.jpg",
+    "filePath": "C:\\Users\\NUNES\\Desktop\\Product Photos\\Hydraulic Pressure Gauge Tester 0-14 kg_cm².jpg",
     "sizeMb": 0.05,
     "category": "Pressure Testing",
     "width": 478,

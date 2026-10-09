@@ -1,7 +1,11 @@
 node_modules
 .env
-.env.local
+.env.*
 .DS_Store
 *.log
-
 .vercel
+credentials/
+service_account.json
+google_drive_service_key.json
+*.zip
+dist/

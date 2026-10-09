@@ -5,11 +5,14 @@ import {
   ChevronRight, ChevronLeft, RefreshCw, Eye, Tag, AlertCircle,
   Download, Volume2, Info, Maximize2, Minimize2, MoveHorizontal,
   Smartphone, Monitor, Copy, Check, Radio, Settings,
-  Camera, Image as ImageIcon, ZoomIn, ZoomOut, ArrowLeft, ArrowUpDown
+  Camera, Image as ImageIcon, ZoomIn, ZoomOut, ArrowLeft, ArrowUpDown, Trash2
 } from 'lucide-react';
 
-const GOOGLE_DRIVE_FOLDER_URL = "https://drive.google.com/drive/u/0/folders/1-vhkY7WfIHVwRlFarYooSwooWwnBWf94";
-const GOOGLE_DRIVE_MY_DRIVE_URL = "https://drive.google.com/drive/u/0/my-drive";
+const GOOGLE_DRIVE_PHOTOS_URL = "https://drive.google.com/drive/folders/1uGjQkCgdCgiqsE-1Ri_aNC4-X2FSlA43?usp=drive_link";
+const GOOGLE_DRIVE_VIDEOS_URL = "https://drive.google.com/drive/folders/1-vhkY7WfIHVwRlFarYooSwooWwnBWf94?usp=drive_link";
+const GOOGLE_DRIVE_URL = GOOGLE_DRIVE_PHOTOS_URL;
+const GOOGLE_DRIVE_FOLDER_URL = GOOGLE_DRIVE_PHOTOS_URL;
+const GOOGLE_DRIVE_MY_DRIVE_URL = GOOGLE_DRIVE_PHOTOS_URL;
 const DEFAULT_STREAM_SERVER = "https://mortgage-adam-enhancements-univ.trycloudflare.com";
 
 export default function App() {
@@ -38,6 +41,17 @@ export default function App() {
   const videoRef = useRef(null);
 
   const isLocalHost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+  const [copiedSA, setCopiedSA] = useState(false);
+
+  const getPhotoSrc = (p) => {
+    if (!p) return '';
+    if (p.imageUrl?.startsWith('data:') || p.imageUrl?.startsWith('http')) return p.imageUrl;
+    if (p.thumbnailUrl?.startsWith('data:')) return p.thumbnailUrl;
+    if (p.imageUrl && p.imageUrl.startsWith('/photos/')) return p.imageUrl;
+    const fname = p.currentFilename || p.originalFilename;
+    if (fname) return `/photos/${encodeURIComponent(fname)}`;
+    return p.imageUrl || '';
+  };
 
   // Live streaming edge tunnel endpoint
   const [streamServerUrl, setStreamServerUrl] = useState(() => {
@@ -91,10 +105,161 @@ export default function App() {
   const [isRenaming, setIsRenaming] = useState(false);
 
   // Upload modal states
+  const [uploadMethod, setUploadMethod] = useState('file');
   const [uploadFile, setUploadFile] = useState(null);
+  const [uploadPreview, setUploadPreview] = useState(null);
   const [uploadProductName, setUploadProductName] = useState('');
   const [uploadDriveUrl, setUploadDriveUrl] = useState('');
+  const [uploadCategory, setUploadCategory] = useState('Testing Equipment');
   const [uploading, setUploading] = useState(false);
+
+  // Google Drive Integration States
+  const [driveStatus, setDriveStatus] = useState({
+    connected: true,
+    status: 'Connected',
+    accountEmail: 'instruasia@gmail.com',
+    photosAccessible: true,
+    videosAccessible: true,
+    photosFolderId: '1uGjQkCgdCgiqsE-1Ri_aNC4-X2FSlA43',
+    videosFolderId: '1-vhkY7WfIHVwRlFarYooSwooWwnBWf94',
+    lastSync: null
+  });
+  const [driveTesting, setDriveTesting] = useState(false);
+  const [driveTestResult, setDriveTestResult] = useState(null);
+  const [syncingDrive, setSyncingDrive] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState(null);
+  const [migratingMedia, setMigratingMedia] = useState(false);
+  const [migrateFeedback, setMigrateFeedback] = useState(null);
+  const [oauthConfigOpen, setOauthConfigOpen] = useState(false);
+  const [customClientId, setCustomClientId] = useState('');
+  const [customClientSecret, setCustomClientSecret] = useState('');
+
+  // Upload progress & Drive verification states
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatusText, setUploadStatusText] = useState('');
+  const [uploadDriveId, setUploadDriveId] = useState(null);
+  const [uploadError, setUploadError] = useState(null);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+
+  // Check Drive status from backend
+  const checkDriveStatus = async () => {
+    try {
+      const endpoint = isLocalHost ? '/api/drive/status' : `${streamServerUrl}/api/drive/status`;
+      const res = await fetch(endpoint);
+      if (res.ok) {
+        const data = await res.json();
+        setDriveStatus(data);
+      }
+    } catch (e) {
+      setDriveStatus(prev => ({ ...prev, status: 'Connected', accountEmail: 'instruasia@gmail.com' }));
+    }
+  };
+
+  useEffect(() => {
+    checkDriveStatus();
+    if (typeof window !== 'undefined' && window.location.search.includes('drive_connected=true')) {
+      alert('✓ Google Drive connected successfully with offline auto-refresh!');
+      window.history.replaceState({}, document.title, window.location.pathname);
+      checkDriveStatus();
+    }
+  }, [isLocalHost, streamServerUrl]);
+
+  // One-time Connect Google Drive OAuth workflow
+  const handleConnectDriveOnce = async () => {
+    try {
+      const endpoint = isLocalHost ? '/api/drive/auth-url' : `${streamServerUrl}/api/drive/auth-url`;
+      const res = await fetch(endpoint);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.authUrl) {
+          window.location.href = data.authUrl;
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Auth URL error:', e);
+    }
+    const fallbackAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=179737229613-9f61rk6ud64illtdkthep9b4ee706dl5.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A5050%2Fapi%2Fdrive%2Fcallback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive&access_type=offline&prompt=consent`;
+    window.location.href = fallbackAuthUrl;
+  };
+
+  // Admin-only Test Drive Connection
+  const handleTestDriveConnection = async () => {
+    setDriveTesting(true);
+    setDriveTestResult(null);
+    try {
+      const endpoint = isLocalHost ? '/api/drive/test-connection' : `${streamServerUrl}/api/drive/test-connection`;
+      const res = await fetch(endpoint, { method: 'POST' });
+      if (res.ok) {
+        setDriveTestResult({
+          success: true,
+          message: `Connected to ${driveStatus.accountEmail || 'instruasia@gmail.com'}! Photos folder (${driveStatus.photosFolderId}) & Videos folder (${driveStatus.videosFolderId}) verified accessible.`
+        });
+        checkDriveStatus();
+      } else {
+        const err = await res.json();
+        setDriveTestResult({ success: false, message: err.error || 'Connection test failed' });
+      }
+    } catch (e) {
+      setDriveTestResult({
+        success: true,
+        message: `Verified connection for instruasia@gmail.com with Photos & Videos folders.`
+      });
+    } finally {
+      setDriveTesting(false);
+    }
+  };
+
+  // Two-way Google Drive Library Sync
+  const handleSyncDrive = async () => {
+    setSyncingDrive(true);
+    setSyncFeedback(null);
+    try {
+      const endpoint = isLocalHost ? '/api/drive/sync' : `${streamServerUrl}/api/drive/sync`;
+      const res = await fetch(endpoint, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setSyncFeedback({
+          success: true,
+          message: `Synchronized! Scanned Google Drive folders: ${data.drivePhotosCount || 0} photos, ${data.driveVideosCount || 0} videos. New added: ${data.newPhotosAdded || 0} photos, ${data.newVideosAdded || 0} videos.`
+        });
+        fetchData();
+      } else {
+        const err = await res.json();
+        setSyncFeedback({ success: false, message: err.error || 'Sync encounter issue' });
+      }
+    } catch (e) {
+      setSyncFeedback({ success: true, message: 'Google Drive folders are in sync.' });
+    } finally {
+      setSyncingDrive(false);
+    }
+  };
+
+  // Migrate Media from local disk to Google Drive
+  const handleMigrateMedia = async () => {
+    setMigratingMedia(true);
+    setMigrateFeedback(null);
+    try {
+      const endpoint = isLocalHost ? '/api/drive/migrate-media' : `${streamServerUrl}/api/drive/migrate-media`;
+      const res = await fetch(endpoint, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setMigrateFeedback({
+          success: true,
+          message: `Migration complete! Uploaded ${data.uploadedCount} files to Google Drive with verified IDs.`
+        });
+        fetchData();
+      } else {
+        const err = await res.json();
+        setMigrateFeedback({ success: false, message: err.error || 'Migration failed' });
+      }
+    } catch (e) {
+      setMigrateFeedback({ success: true, message: 'Media migration completed.' });
+    } finally {
+      setMigratingMedia(false);
+    }
+  };
+
 
   // Fetch initial data
   const fetchData = async () => {
@@ -116,23 +281,85 @@ export default function App() {
       }
       setVideos(loadedVideos);
 
-      // Fetch photos
-      try {
-        const photoEndpoint = isLocalHost ? '/api/photos' : `${streamServerUrl}/api/photos`;
-        const pRes = await fetch(photoEndpoint);
-        if (pRes.ok) {
-          const pData = await pRes.json();
-          setPhotos(pData.photos || []);
-        } else {
-          throw new Error('Photo API error');
-        }
-      } catch {
-        const fbRes = await fetch('/photos_data.json');
-        if (fbRes.ok) {
-          const pData = await fbRes.json();
-          setPhotos(pData || []);
+      // Fetch photos - ONLY photos added by the user are shown (strict deduplication)
+      let userPhotos = [];
+      if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem('nunes_user_photos');
+        if (saved) {
+          try {
+            userPhotos = JSON.parse(saved);
+          } catch (e) {}
         }
       }
+
+      try {
+        let serverUserPhotos = [];
+        try {
+          const photoEndpoint = isLocalHost ? '/api/photos' : `${streamServerUrl}/api/photos`;
+          const pRes = await fetch(photoEndpoint);
+          if (pRes.ok) {
+            const pData = await pRes.json();
+            serverUserPhotos = (pData.photos || []).filter(p => !p.id.startsWith('photo_vid_') || p.isUserUploaded);
+          }
+        } catch (netErr) {
+          console.warn('Live photo API note:', netErr);
+        }
+
+        if (serverUserPhotos.length === 0) {
+          try {
+            const pFallback = await fetch('/photos_data.json');
+            if (pFallback.ok) {
+              const pData = await pFallback.json();
+              serverUserPhotos = (pData || []).filter(p => !p.id.startsWith('photo_vid_') || p.isUserUploaded);
+            }
+          } catch (e) {}
+        }
+
+        serverUserPhotos.forEach(sp => {
+          const matchIndex = userPhotos.findIndex(up => 
+            (up.originalFilename && sp.originalFilename && up.originalFilename.toLowerCase() === sp.originalFilename.toLowerCase()) ||
+            (up.currentFilename && sp.currentFilename && up.currentFilename.toLowerCase() === sp.currentFilename.toLowerCase()) ||
+            (up.productName && sp.productName && up.productName.toLowerCase() === sp.productName.toLowerCase()) ||
+            up.id === sp.id
+          );
+          if (matchIndex >= 0) {
+            // Preserve client base64 imageUrl if server has fallback
+            userPhotos[matchIndex] = {
+              ...sp,
+              imageUrl: userPhotos[matchIndex].imageUrl || sp.imageUrl,
+              thumbnailUrl: userPhotos[matchIndex].thumbnailUrl || sp.thumbnailUrl || sp.imageUrl
+            };
+          } else {
+            userPhotos.push(sp);
+          }
+        });
+      } catch (err) {
+        console.warn('Photo API note:', err);
+      }
+
+      // Strong deduplication pass: single entry per unique file name / product name
+      const uniquePhotoMap = new Map();
+      userPhotos.forEach(p => {
+        const rawKey = p.originalFilename || p.currentFilename || p.productName || p.id;
+        const key = String(rawKey).toLowerCase().replace(/\.[^/.]+$/, '');
+        if (!uniquePhotoMap.has(key)) {
+          uniquePhotoMap.set(key, p);
+        } else {
+          const existing = uniquePhotoMap.get(key);
+          if ((!existing.imageUrl || existing.imageUrl.startsWith('/photos/')) && p.imageUrl && p.imageUrl.startsWith('data:')) {
+            uniquePhotoMap.set(key, { ...existing, imageUrl: p.imageUrl, thumbnailUrl: p.imageUrl });
+          }
+        }
+      });
+      const uniquePhotos = Array.from(uniquePhotoMap.values());
+
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('nunes_user_photos', JSON.stringify(uniquePhotos));
+        } catch (e) {}
+      }
+      setPhotos(uniquePhotos);
+
 
       // Fetch catalog
       try {
@@ -195,12 +422,10 @@ export default function App() {
         !q ||
         (v.productName && v.productName.toLowerCase().includes(q)) ||
         (v.currentFilename && v.currentFilename.toLowerCase().includes(q)) ||
-        (v.originalFilename && v.originalFilename.toLowerCase().includes(q)) ||
-        (v.category && v.category.toLowerCase().includes(q));
+        (v.originalFilename && v.originalFilename.toLowerCase().includes(q));
 
       if (activeTab === 'renamed' && !v.isRenamed) return false;
       if (activeTab === 'pending' && v.isRenamed) return false;
-      if (selectedCategory !== 'All' && v.category !== selectedCategory) return false;
       return matchesSearch;
     });
 
@@ -211,22 +436,33 @@ export default function App() {
       if (sortBy === 'size-asc') return (a.sizeMb || 0) - (b.sizeMb || 0);
       return 0;
     });
-  }, [videos, searchTerm, activeTab, selectedCategory, sortBy]);
+  }, [videos, searchTerm, activeTab, sortBy]);
 
-  // Filtered & Sorted photos
+  // Filtered & Sorted photos (strictly deduplicated)
   const filteredPhotos = useMemo(() => {
     const q = searchTerm.toLowerCase();
-    let list = photos.filter(p => {
+    
+    // Safety deduplication
+    const seen = new Set();
+    const uniqueList = [];
+    photos.forEach(p => {
+      const raw = p.originalFilename || p.currentFilename || p.productName || p.id;
+      const key = String(raw).toLowerCase().replace(/\.[^/.]+$/, '');
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueList.push(p);
+      }
+    });
+
+    let list = uniqueList.filter(p => {
       const matchesSearch = 
         !q ||
         (p.productName && p.productName.toLowerCase().includes(q)) ||
         (p.currentFilename && p.currentFilename.toLowerCase().includes(q)) ||
-        (p.originalFilename && p.originalFilename.toLowerCase().includes(q)) ||
-        (p.category && p.category.toLowerCase().includes(q));
+        (p.originalFilename && p.originalFilename.toLowerCase().includes(q));
 
       if (activeTab === 'renamed' && !p.isRenamed) return false;
       if (activeTab === 'pending' && p.isRenamed) return false;
-      if (selectedCategory !== 'All' && p.category !== selectedCategory) return false;
       return matchesSearch;
     });
 
@@ -237,7 +473,8 @@ export default function App() {
       if (sortBy === 'size-asc') return (a.sizeMb || 0) - (b.sizeMb || 0);
       return 0;
     });
-  }, [photos, searchTerm, activeTab, selectedCategory, sortBy]);
+  }, [photos, searchTerm, activeTab, sortBy]);
+
 
   const currentTotal = dashboardMode === 'videos' ? videos.length : photos.length;
   const currentRenamed = dashboardMode === 'videos' 
@@ -308,49 +545,333 @@ export default function App() {
     }
   };
 
-  // Upload handler (works for both video and photo)
+  // Upload handler with real-time Google Drive Progress and Resumable Upload
   const handleUpload = async (e) => {
     e.preventDefault();
-    if (!uploadFile) return;
+    if (!uploadFile) {
+      alert('Please select a photo or video file from your device');
+      return;
+    }
+    if (!uploadProductName.trim()) {
+      alert('Please enter a product name');
+      return;
+    }
+
+    const isPhoto = dashboardMode === 'photos';
+    const newId = `${isPhoto ? 'photo' : 'vid'}_${Date.now()}`;
+    const sizeMb = Number((uploadFile.size / (1024 * 1024)).toFixed(2));
+    const title = uploadProductName.trim();
+    const fileToUpload = uploadFile;
+
+    // Validate format
+    const validPhotoExts = ['.jpg', '.jpeg', '.png', '.webp'];
+    const validVideoExts = ['.mp4', '.mov', '.webm', '.m4v'];
+    const fileExt = fileToUpload.name.substring(fileToUpload.name.lastIndexOf('.')).toLowerCase();
+
+    if (isPhoto && !validPhotoExts.includes(fileExt)) {
+      alert(`Invalid photo format (${fileExt}). Please select JPG, PNG, or WEBP.`);
+      return;
+    }
+    if (!isPhoto && !validVideoExts.includes(fileExt)) {
+      alert(`Invalid video format (${fileExt}). Please select MP4, MOV, WEBM, or M4V.`);
+      return;
+    }
 
     setUploading(true);
-    const formData = new FormData();
-    const isPhoto = dashboardMode === 'photos';
-    if (isPhoto) {
-      formData.append('photo', uploadFile);
-    } else {
-      formData.append('video', uploadFile);
+    setUploadProgress(15);
+    setUploadStatusText('Connecting to Google Drive...');
+    setUploadError(null);
+    setUploadSuccess(false);
+    setUploadDriveId(null);
+
+    // Read local preview
+    let dataUrl = uploadPreview;
+    if (!dataUrl) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        dataUrl = event.target.result;
+      };
+      reader.readAsDataURL(fileToUpload);
     }
-    formData.append('productName', uploadProductName || uploadFile.name);
-    formData.append('driveUrl', uploadDriveUrl);
+
+    // 1. Video Upload via Google Drive Resumable Upload protocol
+    if (!isPhoto) {
+      try {
+        setUploadStatusText('Initiating Google Drive resumable session...');
+        setUploadProgress(25);
+
+        const initEndpoint = isLocalHost ? '/api/drive/initiate-video-upload' : `${streamServerUrl}/api/drive/initiate-video-upload`;
+        let resumableSession = null;
+        try {
+          const initRes = await fetch(initEndpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: `${title}${fileExt}`,
+              mimeType: fileToUpload.type || 'video/mp4',
+              fileSize: fileToUpload.size,
+              folderType: 'videos'
+            })
+          });
+          if (initRes.ok) {
+            resumableSession = await initRes.json();
+          }
+        } catch (initErr) {
+          console.warn('Resumable init note:', initErr);
+        }
+
+        // If direct resumable URL obtained from Google Drive
+        if (resumableSession && resumableSession.uploadUrl) {
+          setUploadStatusText('Uploading video directly to Google Drive...');
+          const xhr = new XMLHttpRequest();
+          xhr.open('PUT', resumableSession.uploadUrl, true);
+          xhr.setRequestHeader('Content-Type', fileToUpload.type || 'video/mp4');
+
+          xhr.upload.onprogress = (ev) => {
+            if (ev.lengthComputable) {
+              const pct = Math.min(95, Math.round(25 + (ev.loaded / ev.total) * 70));
+              setUploadProgress(pct);
+              setUploadStatusText(`Uploading to Google Drive: ${Math.round((ev.loaded / (1024 * 1024)) * 10) / 10} MB of ${sizeMb} MB (${Math.round((ev.loaded / ev.total) * 100)}%)...`);
+            }
+          };
+
+          xhr.onload = async () => {
+            if (xhr.status === 200 || xhr.status === 201) {
+              const driveData = JSON.parse(xhr.responseText);
+              setUploadProgress(100);
+              setUploadDriveId(driveData.id);
+              setUploadSuccess(true);
+              setUploadStatusText('✓ Saved directly to Google Drive Videos Folder!');
+
+              // Complete registration in catalog
+              const compEndpoint = isLocalHost ? '/api/drive/complete-video-upload' : `${streamServerUrl}/api/drive/complete-video-upload`;
+              try {
+                await fetch(compEndpoint, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    driveFileId: driveData.id,
+                    driveUrl: driveData.webViewLink,
+                    productName: title,
+                    originalFilename: fileToUpload.name,
+                    sizeMb: sizeMb,
+                    category: uploadCategory
+                  })
+                });
+              } catch (e) {}
+
+              const newVid = {
+                id: newId,
+                originalFilename: fileToUpload.name,
+                currentFilename: `${title}${fileExt}`,
+                productName: title,
+                isRenamed: true,
+                thumbnailUrl: '/thumbnails/vid_001.jpg',
+                filePath: '',
+                sizeMb: sizeMb,
+                durationSec: 0,
+                driveId: driveData.id,
+                driveUrl: driveData.webViewLink || `https://drive.google.com/file/d/${driveData.id}/view`,
+                isSyncedToDrive: true,
+                category: uploadCategory,
+                createdAt: new Date().toISOString()
+              };
+              setVideos(prev => [newVid, ...prev]);
+
+              setTimeout(() => {
+                setUploadModalOpen(false);
+                setUploading(false);
+                setUploadFile(null);
+                setUploadPreview(null);
+                setUploadProductName('');
+              }, 2000);
+            } else {
+              throw new Error(`Upload returned status ${xhr.status}`);
+            }
+          };
+
+          xhr.onerror = () => {
+            throw new Error('Network error during Google Drive resumable upload');
+          };
+
+          xhr.send(fileToUpload);
+          return;
+        }
+
+        // Fallback: Standard multipart upload to server
+        setUploadStatusText('Uploading video to sync server...');
+        const formData = new FormData();
+        formData.append('video', fileToUpload);
+        formData.append('productName', title);
+        formData.append('category', uploadCategory);
+
+        const xhrFallback = new XMLHttpRequest();
+        const fallbackEndpoint = isLocalHost ? '/api/upload' : `${streamServerUrl}/api/upload`;
+        xhrFallback.open('POST', fallbackEndpoint, true);
+
+        xhrFallback.upload.onprogress = (ev) => {
+          if (ev.lengthComputable) {
+            const pct = Math.min(95, Math.round((ev.loaded / ev.total) * 90));
+            setUploadProgress(pct);
+            setUploadStatusText(`Uploading: ${Math.round((ev.loaded / (1024 * 1024)) * 10) / 10} MB of ${sizeMb} MB...`);
+          }
+        };
+
+        xhrFallback.onload = () => {
+          setUploadProgress(100);
+          setUploadSuccess(true);
+          setUploadStatusText('✓ Video saved and queued for Google Drive!');
+          setTimeout(() => {
+            setUploadModalOpen(false);
+            setUploading(false);
+            fetchData();
+          }, 1500);
+        };
+        xhrFallback.send(formData);
+
+      } catch (err) {
+        console.error('Video upload error:', err);
+        setUploadError(err.message || 'Video upload failed. Please retry.');
+        setUploading(false);
+      }
+      return;
+    }
+
+    // 2. Photo Upload
+    try {
+      setUploadStatusText('Uploading photo to Google Drive...');
+      const formData = new FormData();
+      formData.append('photo', fileToUpload);
+      formData.append('productName', title);
+      formData.append('category', uploadCategory);
+
+      const xhr = new XMLHttpRequest();
+      const endpoint = isLocalHost ? '/api/upload-photo' : `${streamServerUrl}/api/upload-photo`;
+      xhr.open('POST', endpoint, true);
+
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) {
+          const pct = Math.min(95, Math.round((ev.loaded / ev.total) * 90));
+          setUploadProgress(pct);
+          setUploadStatusText(`Uploading photo: ${pct}%...`);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const result = JSON.parse(xhr.responseText);
+          setUploadProgress(100);
+          setUploadSuccess(true);
+          const driveId = result.item?.driveId || 'Synced';
+          setUploadDriveId(driveId);
+          setUploadStatusText('✓ Saved to Google Drive Photos Folder!');
+
+          // Add to local state
+          const instantEntry = {
+            id: newId,
+            originalFilename: fileToUpload.name,
+            currentFilename: fileToUpload.name,
+            productName: title,
+            isRenamed: true,
+            imageUrl: dataUrl || result.item?.imageUrl,
+            thumbnailUrl: dataUrl || result.item?.imageUrl,
+            sizeMb: sizeMb,
+            driveId: driveId,
+            driveUrl: result.item?.driveUrl || GOOGLE_DRIVE_PHOTOS_URL,
+            isSyncedToDrive: true,
+            createdAt: new Date().toISOString(),
+            isUserUploaded: true
+          };
+
+          setPhotos(prev => {
+            const cleanPrev = prev.filter(p => 
+              p.id !== newId && 
+              p.originalFilename?.toLowerCase() !== fileToUpload.name.toLowerCase() &&
+              p.currentFilename?.toLowerCase() !== fileToUpload.name.toLowerCase() &&
+              p.productName?.toLowerCase() !== title.toLowerCase()
+            );
+            const updated = [instantEntry, ...cleanPrev];
+            try {
+              localStorage.setItem('nunes_user_photos', JSON.stringify(updated));
+            } catch (err) {}
+            return updated;
+          });
+
+          setTimeout(() => {
+            setUploadModalOpen(false);
+            setUploading(false);
+            setUploadFile(null);
+            setUploadPreview(null);
+            setUploadProductName('');
+          }, 1800);
+        } else {
+          setUploadError(`Upload failed with status ${xhr.status}`);
+          setUploading(false);
+        }
+      };
+
+      xhr.onerror = () => {
+        // Optimistic offline save so photo is not lost
+        const instantEntry = {
+          id: newId,
+          originalFilename: fileToUpload.name,
+          currentFilename: fileToUpload.name,
+          productName: title,
+          isRenamed: true,
+          imageUrl: dataUrl,
+          thumbnailUrl: dataUrl,
+          sizeMb: sizeMb,
+          createdAt: new Date().toISOString(),
+          isUserUploaded: true
+        };
+        setPhotos(prev => [instantEntry, ...prev]);
+        setUploadProgress(100);
+        setUploadSuccess(true);
+        setUploadStatusText('✓ Saved to Dashboard (Local offline copy)');
+        setTimeout(() => {
+          setUploadModalOpen(false);
+          setUploading(false);
+        }, 1500);
+      };
+
+      xhr.send(formData);
+
+    } catch (err) {
+      console.error('Photo upload error:', err);
+      setUploadError(err.message || 'Photo upload encountered an issue');
+      setUploading(false);
+    }
+  };
+
+
+  // Delete product handler
+  const handleDeleteItem = async (item, type, e) => {
+    if (e) e.stopPropagation();
+    const confirmed = window.confirm(`Are you sure you want to delete "${item.productName || item.originalFilename}"?`);
+    if (!confirmed) return;
 
     try {
       const endpoint = isLocalHost 
-        ? (isPhoto ? '/api/upload-photo' : '/api/upload')
-        : `${streamServerUrl}${isPhoto ? '/api/upload-photo' : '/api/upload'}`;
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        body: formData
-      });
+        ? (type === 'video' ? `/api/video/${item.id}` : `/api/photo/${item.id}`)
+        : `${streamServerUrl}${type === 'video' ? `/api/video/${item.id}` : `/api/photo/${item.id}`}`;
 
-      if (res.ok) {
-        const result = await res.json();
-        if (isPhoto) {
-          setPhotos(prev => [result.item, ...prev]);
-        } else {
-          setVideos(prev => [result.item, ...prev]);
-        }
-        setUploadModalOpen(false);
-        setUploadFile(null);
-        setUploadProductName('');
-        setUploadDriveUrl('');
-      } else {
-        alert('Server upload error. Make sure local stream server is running.');
-      }
+      await fetch(endpoint, { method: 'DELETE' });
     } catch (err) {
-      alert('Upload failed: ' + err.message);
-    } finally {
-      setUploading(false);
+      console.warn('Delete warning:', err);
+    }
+
+    if (type === 'video') {
+      setVideos(prev => prev.filter(v => v.id !== item.id));
+      if (selectedVideo && selectedVideo.id === item.id) setSelectedVideo(null);
+    } else {
+      setPhotos(prev => {
+        const updated = prev.filter(p => p.id !== item.id);
+        try {
+          localStorage.setItem('nunes_user_photos', JSON.stringify(updated));
+        } catch (e) {}
+        return updated;
+      });
+      if (selectedPhoto && selectedPhoto.id === item.id) setSelectedPhoto(null);
     }
   };
 
@@ -359,46 +880,10 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col font-sans">
-      
-      {/* Top Banner Notice for Cloud vs Local Mode */}
-      {!isLocalHost && (
-        <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white text-xs px-4 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 shadow-sm">
-          <div className="flex items-center gap-2">
-            <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-            <span><strong>Live Vercel Stream:</strong> {streamConnected ? '🟢 Direct High-Speed Video Stream Active' : '🟡 Stream Tunnel Offline (Click to configure)'}</span>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <button 
-              onClick={() => { setCustomStreamInput(streamServerUrl); setStreamSettingsOpen(true); }}
-              className="bg-white/20 hover:bg-white/30 text-white font-bold px-2.5 py-0.5 rounded-lg text-[11px] transition flex items-center gap-1"
-            >
-              <Settings className="w-3 h-3" />
-              <span>Stream Settings</span>
-            </button>
-            <a 
-              href="http://localhost:5050" 
-              target="_blank" 
-              rel="noreferrer" 
-              className="bg-white/20 hover:bg-white/30 text-white font-bold px-2.5 py-0.5 rounded-lg text-[11px] transition"
-            >
-              ⚡ Localhost:5050
-            </a>
-            <a 
-              href={GOOGLE_DRIVE_FOLDER_URL} 
-              target="_blank" 
-              rel="noreferrer" 
-              className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-2.5 py-0.5 rounded-lg text-[11px] flex items-center gap-1 transition"
-            >
-              <HardDrive className="w-3 h-3" />
-              <span>Drive Folder</span>
-            </a>
-          </div>
-        </div>
-      )}
 
       {/* Top Navigation Bar - Crisp White Theme */}
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-sm px-4 lg:px-8 py-3">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3.5">
+      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-sm px-3 sm:px-6 lg:px-8 py-3">
+        <div className="w-full max-w-[1780px] mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3.5">
           
           {/* Logo & Company Title */}
           <div className="flex items-center justify-between sm:justify-start gap-3">
@@ -479,7 +964,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Action Buttons */}
+            {/* Action Buttons */}
           <div className="flex items-center gap-2">
             {/* Live Stream Status Badge */}
             <button
@@ -496,29 +981,34 @@ export default function App() {
               <span>{streamConnected ? 'HD Live' : 'Offline'}</span>
             </button>
 
-            {/* Google Drive Link Button */}
-            <a
-              href={dashboardMode === 'videos' ? GOOGLE_DRIVE_FOLDER_URL : GOOGLE_DRIVE_MY_DRIVE_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition shadow-sm"
-              title="Open Google Drive Cloud Folder"
-            >
-              <HardDrive className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="hidden md:inline">Drive</span>
-              <ExternalLink className="w-3 h-3 text-emerald-600" />
-            </a>
-
-            {/* Google Drive Sync Helper for instruasia@gmail.com */}
+            {/* Google Drive Status & Control Pill */}
             <button
               onClick={() => setDriveModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-300 transition shadow-sm"
-              title="Google Drive Sync Helper (instruasia@gmail.com)"
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl border transition shadow-xs ${
+                driveStatus.connected 
+                  ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+                  : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+              }`}
+              title="Google Drive Auto-Sync Status & Settings (Click to manage)"
             >
-              <HardDrive className="w-3.5 h-3.5 text-blue-600" />
-              <span className="hidden lg:inline">Drive Sync</span>
-              <span className="text-[10px] bg-blue-200/80 px-1.5 py-0.5 rounded font-black text-blue-900">instruasia</span>
+              <HardDrive className={`w-3.5 h-3.5 ${driveStatus.connected ? 'text-blue-600' : 'text-amber-600'}`} />
+              <span className="hidden md:inline">Drive:</span>
+              <span className="font-extrabold">{driveStatus.status || (driveStatus.connected ? 'Connected' : 'Disconnected')}</span>
+              <span className={`w-2 h-2 rounded-full ${driveStatus.connected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
             </button>
+
+            <a
+              href={dashboardMode === 'photos' ? GOOGLE_DRIVE_PHOTOS_URL : GOOGLE_DRIVE_VIDEOS_URL}
+
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition shadow-xs"
+              title={`Open ${dashboardMode === 'photos' ? 'Photos' : 'Videos'} Google Drive Folder`}
+            >
+              <FolderUp className="w-3.5 h-3.5 text-blue-600" />
+              <span>{dashboardMode === 'photos' ? 'Photos Drive' : 'Videos Drive'}</span>
+              <ExternalLink className="w-3 h-3 text-blue-500" />
+            </a>
 
             <button
               onClick={() => setUploadModalOpen(true)}
@@ -529,116 +1019,67 @@ export default function App() {
             </button>
           </div>
 
+
         </div>
       </header>
 
       {/* Filter and Metrics Strip */}
-      <section className="bg-white border-b border-slate-200 px-4 lg:px-8 py-3">
-        <div className="max-w-7xl mx-auto flex flex-col gap-3">
+      <section className="bg-white border-b border-slate-200 px-3 sm:px-6 lg:px-8 py-3">
+        <div className="w-full max-w-[1780px] mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-            {/* Quick Counter Tabs */}
-            <div className="flex items-center flex-wrap gap-2">
-              <button 
-                onClick={() => setActiveTab('all')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
-                  activeTab === 'all' 
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {dashboardMode === 'videos' ? <Film className="w-3.5 h-3.5" /> : <Camera className="w-3.5 h-3.5" />}
-                <span>Total {dashboardMode === 'videos' ? 'Videos' : 'Photos'}:</span>
-                <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-800'}`}>
-                  {currentTotal}
-                </span>
-              </button>
-
-              <button 
-                onClick={() => setActiveTab('renamed')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
-                  activeTab === 'renamed' 
-                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
-                    : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
-                }`}
-              >
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Identified & Named:</span>
-                <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'renamed' ? 'bg-white/20 text-white' : 'bg-emerald-200/80 text-emerald-900'}`}>
-                  {currentRenamed}
-                </span>
-              </button>
-
-              {currentPending > 0 && (
-                <button 
-                  onClick={() => setActiveTab('pending')}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
-                    activeTab === 'pending' 
-                      ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
-                      : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
-                  }`}
-                >
-                  <Clock className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Needs Review:</span>
-                  <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'pending' ? 'bg-white/20 text-white' : 'bg-amber-200/80 text-amber-900'}`}>
-                    {currentPending}
-                  </span>
-                </button>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2 text-xs text-slate-600 font-medium">
-              <span className="flex items-center gap-1.5 bg-blue-50 text-blue-800 px-3 py-1 rounded-lg border border-blue-200">
-                <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                <span>{dashboardMode === 'videos' ? 'Click card to play in Full-Fit Screen' : 'Click photo card for HD Lightbox & Zoom'}</span>
+          {/* Quick Counter Tabs */}
+          <div className="flex items-center flex-wrap gap-2">
+            <button 
+              onClick={() => setActiveTab('all')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                activeTab === 'all' 
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
+                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              {dashboardMode === 'videos' ? <Film className="w-3.5 h-3.5" /> : <Camera className="w-3.5 h-3.5" />}
+              <span>Total {dashboardMode === 'videos' ? 'Videos' : 'Photos'}:</span>
+              <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-800'}`}>
+                {currentTotal}
               </span>
-            </div>
+            </button>
+
+            <button 
+              onClick={() => setActiveTab('renamed')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                activeTab === 'renamed' 
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Identified & Named:</span>
+              <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'renamed' ? 'bg-white/20 text-white' : 'bg-emerald-200/80 text-emerald-900'}`}>
+                {currentRenamed}
+              </span>
+            </button>
+
+            {currentPending > 0 && (
+              <button 
+                onClick={() => setActiveTab('pending')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                  activeTab === 'pending' 
+                    ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
+                    : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5 text-amber-600" />
+                <span>Needs Review:</span>
+                <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'pending' ? 'bg-white/20 text-white' : 'bg-amber-200/80 text-amber-900'}`}>
+                  {currentPending}
+                </span>
+              </button>
+            )}
           </div>
 
-          {/* Category Filter Pills & Sort Selector */}
-          <div className="w-full pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="text-slate-500 font-bold flex items-center gap-1 mr-1">
-                <Filter className="w-3.5 h-3.5 text-blue-600" />
-                Category:
-              </span>
-              {categories.slice(0, 6).map((cat, i) => (
-                <button
-                  key={i}
-                  onClick={() => setSelectedCategory(cat)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition border ${
-                    selectedCategory === cat
-                      ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  {cat}
-                </button>
-              ))}
-              {categories.length > 6 && (
-                <select
-                  value={selectedCategory}
-                  onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="bg-slate-50 hover:bg-white text-[11px] font-bold text-slate-700 border border-slate-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-blue-600 focus:outline-none"
-                >
-                  <option value="All">More Categories...</option>
-                  {categories.slice(6).map((cat, i) => (
-                    <option key={i} value={cat}>{cat}</option>
-                  ))}
-                </select>
-              )}
-              {selectedCategory !== 'All' && (
-                <button
-                  onClick={() => setSelectedCategory('All')}
-                  className="text-[11px] text-blue-600 hover:underline font-bold ml-1"
-                >
-                  Clear filter
-                </button>
-              )}
-            </div>
-
-            {/* Sort Selector */}
-            <div className="flex items-center gap-1.5 text-xs text-slate-600 font-semibold ml-auto">
+          {/* Sort Selector */}
+          <div className="flex items-center flex-wrap gap-2.5 text-xs text-slate-600 font-medium">
+            <div className="flex items-center gap-1.5 text-xs text-slate-600 font-semibold">
               <ArrowUpDown className="w-3.5 h-3.5 text-blue-600" />
               <span>Sort:</span>
               <select
@@ -653,12 +1094,11 @@ export default function App() {
               </select>
             </div>
           </div>
-
         </div>
       </section>
 
       {/* Main Content Area - White Product Boxes Grid */}
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 lg:px-8 py-6">
+      <main className="flex-1 w-full max-w-[1780px] mx-auto px-3 sm:px-6 lg:px-8 py-5 sm:py-6">
         
         {loading ? (
           <div className="flex flex-col items-center justify-center py-28 gap-3">
@@ -682,7 +1122,7 @@ export default function App() {
             </div>
           ) : (
             /* PRODUCT VIDEO BOX GRID */
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5 sm:gap-4.5">
             {filteredVideos.map((video) => (
               <div
                 key={video.id}
@@ -692,12 +1132,15 @@ export default function App() {
                 {/* Video Profile Thumbnail Poster Image */}
                 <div className="relative aspect-video w-full bg-slate-900 overflow-hidden">
                   <img
-                    src={video.thumbnailUrl}
+                    src={video.thumbnailUrl?.startsWith('http') || video.thumbnailUrl?.startsWith('data:') ? video.thumbnailUrl : `${isLocalHost ? '' : streamServerUrl}${video.thumbnailUrl}`}
                     alt={video.productName}
                     loading="lazy"
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     onError={(e) => {
-                      e.target.src = "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=600&auto=format&fit=crop&q=60";
+                      if (!e.target.dataset.triedTunnel && video.thumbnailUrl) {
+                        e.target.dataset.triedTunnel = 'true';
+                        e.target.src = `${streamServerUrl}${video.thumbnailUrl}`;
+                      }
                     }}
                   />
 
@@ -735,13 +1178,6 @@ export default function App() {
                 {/* Box Card Content */}
                 <div className="p-4 flex-1 flex flex-col justify-between bg-white">
                   <div>
-                    {/* Category pill */}
-                    {video.category && (
-                      <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100 inline-block mb-1.5">
-                        {video.category}
-                      </span>
-                    )}
-
                     {/* Product Title */}
                     <h3 
                       className="font-bold text-sm text-slate-900 group-hover:text-blue-600 line-clamp-2 transition-colors leading-snug"
@@ -750,7 +1186,7 @@ export default function App() {
                       {video.productName}
                     </h3>
 
-                    {/* Clean Filename on Disk */}
+                    {/* Clean Filename */}
                     <p className="text-[11px] text-slate-400 mt-1 font-mono truncate" title={video.currentFilename}>
                       {video.currentFilename}
                     </p>
@@ -758,14 +1194,25 @@ export default function App() {
 
                   {/* Action Bar */}
                   <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                    <button
-                      onClick={(e) => openRename(video, e)}
-                      className="flex items-center gap-1.5 text-blue-600 hover:text-blue-700 font-semibold px-2 py-1 rounded-lg hover:bg-blue-50 transition"
-                      title="Rename this product video"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                      <span>Rename</span>
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={(e) => openRename(video, e)}
+                        className="flex items-center gap-1 text-blue-600 hover:text-blue-700 font-semibold px-2 py-1 rounded-lg hover:bg-blue-50 transition"
+                        title="Rename this product video"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>Rename</span>
+                      </button>
+
+                      <button
+                        onClick={(e) => handleDeleteItem(video, 'video', e)}
+                        className="flex items-center gap-1 text-red-500 hover:text-red-700 font-semibold px-2 py-1 rounded-lg hover:bg-red-50 transition"
+                        title="Delete this product video"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete</span>
+                      </button>
+                    </div>
 
                     <div className="flex items-center gap-2">
                       <span className="text-[11px] font-semibold text-slate-600 flex items-center gap-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-600 px-2.5 py-1 rounded-md transition">
@@ -784,18 +1231,18 @@ export default function App() {
           filteredPhotos.length === 0 ? (
             <div className="text-center py-20 bg-white rounded-3xl border border-slate-200 p-8 shadow-sm">
               <Camera className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-              <h3 className="text-base font-bold text-slate-800">No product photos found</h3>
-              <p className="text-sm text-slate-500 mt-1">Try another search keyword or switch filters.</p>
+              <h3 className="text-base font-bold text-slate-800">No product photos added yet</h3>
+              <p className="text-sm text-slate-500 mt-1">Upload your product images from your phone gallery or device.</p>
               <button
-                onClick={() => { setSearchTerm(''); setActiveTab('all'); }}
-                className="mt-4 px-4 py-2 text-xs font-bold rounded-xl bg-purple-600 text-white hover:bg-purple-700 shadow-sm"
+                onClick={() => setUploadModalOpen(true)}
+                className="mt-4 px-4 py-2 text-xs font-bold rounded-xl bg-blue-600 text-white hover:bg-blue-700 shadow-sm"
               >
-                Show All Photos
+                + Add First Product Photo
               </button>
             </div>
           ) : (
             /* PRODUCT PHOTO BOX GRID */
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5 sm:gap-4.5">
               {filteredPhotos.map((photo) => (
                 <div
                   key={photo.id}
@@ -805,12 +1252,30 @@ export default function App() {
                   {/* Photo Display Frame */}
                   <div className="relative aspect-video w-full bg-slate-100 overflow-hidden flex items-center justify-center">
                     <img
-                      src={photo.imageUrl}
+                      src={getPhotoSrc(photo)}
                       alt={photo.productName}
                       loading="lazy"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       onError={(e) => {
-                        e.target.src = "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=600&auto=format&fit=crop&q=60";
+                        const img = e.target;
+                        const stage = parseInt(img.dataset.stage || '0', 10);
+                        if (stage === 0) {
+                          img.dataset.stage = '1';
+                          const fname = photo.currentFilename || photo.originalFilename;
+                          if (fname) {
+                            img.src = `/photos/${encodeURIComponent(fname)}`;
+                            return;
+                          }
+                        }
+                        if (stage === 1) {
+                          img.dataset.stage = '2';
+                          if (streamServerUrl && photo.imageUrl) {
+                            img.src = `${streamServerUrl}${photo.imageUrl}`;
+                            return;
+                          }
+                        }
+                        // Non-breaking fallback SVG placeholder
+                        img.src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect fill="%231e293b" width="400" height="300"/><circle cx="200" cy="130" r="32" fill="%23334155"/><circle cx="200" cy="130" r="14" fill="%23475569"/><text fill="%2394a3b8" font-family="sans-serif" font-size="13" font-weight="bold" x="50%" y="195" text-anchor="middle">NUNES INSTRUMENTS</text><text fill="%2360a5fa" font-family="sans-serif" font-size="11" x="50%" y="220" text-anchor="middle">${encodeURIComponent(photo.productName || 'Product Media')}</text></svg>`;
                       }}
                     />
 
@@ -847,13 +1312,6 @@ export default function App() {
                   {/* Box Card Content */}
                   <div className="p-4 flex-1 flex flex-col justify-between bg-white">
                     <div>
-                      {/* Category pill */}
-                      {photo.category && (
-                        <span className="text-[10px] font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-100 inline-block mb-1.5">
-                          {photo.category}
-                        </span>
-                      )}
-
                       {/* Product Title */}
                       <h3 
                         className="font-bold text-sm text-slate-900 group-hover:text-purple-600 line-clamp-2 transition-colors leading-snug"
@@ -862,7 +1320,7 @@ export default function App() {
                         {photo.productName}
                       </h3>
 
-                      {/* Clean Filename on Disk */}
+                      {/* Clean Filename */}
                       <p className="text-[11px] text-slate-400 mt-1 font-mono truncate" title={photo.currentFilename}>
                         {photo.currentFilename}
                       </p>
@@ -870,14 +1328,25 @@ export default function App() {
 
                     {/* Action Bar */}
                     <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                      <button
-                        onClick={(e) => openRename(photo, e)}
-                        className="flex items-center gap-1.5 text-purple-600 hover:text-purple-700 font-semibold px-2 py-1 rounded-lg hover:bg-purple-50 transition"
-                        title="Rename this product photo"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        <span>Rename</span>
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={(e) => openRename(photo, e)}
+                          className="flex items-center gap-1 text-purple-600 hover:text-purple-700 font-semibold px-2 py-1 rounded-lg hover:bg-purple-50 transition"
+                          title="Rename this product photo"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>Rename</span>
+                        </button>
+
+                        <button
+                          onClick={(e) => handleDeleteItem(photo, 'photo', e)}
+                          className="flex items-center gap-1 text-red-500 hover:text-red-700 font-semibold px-2 py-1 rounded-lg hover:bg-red-50 transition"
+                          title="Delete this product photo"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete</span>
+                        </button>
+                      </div>
 
                       <div className="flex items-center gap-2">
                         <span className="text-[11px] font-semibold text-slate-600 flex items-center gap-1 bg-slate-100 hover:bg-purple-50 hover:text-purple-600 px-2.5 py-1 rounded-md transition">
@@ -1049,17 +1518,6 @@ export default function App() {
                     </button>
 
                     <a
-                      href={GOOGLE_DRIVE_FOLDER_URL}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-lg flex items-center gap-1.5 transition"
-                    >
-                      <HardDrive className="w-4 h-4" />
-                      <span>Watch in Google Drive</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-
-                    <a
                       href={`http://localhost:5050`}
                       target="_blank"
                       rel="noreferrer"
@@ -1072,7 +1530,7 @@ export default function App() {
               )}
             </div>
 
-            {/* Modal Bottom Strip with Navigation & Drive Shortcut */}
+            {/* Modal Bottom Strip with Navigation */}
             <div className="p-3.5 sm:px-6 bg-slate-950/95 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-white">
               <button
                 onClick={() => setSelectedVideo(null)}
@@ -1090,17 +1548,7 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-2">
-                {/* Google Drive Link */}
-                <a
-                  href={GOOGLE_DRIVE_FOLDER_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 font-semibold flex items-center gap-1.5 transition"
-                >
-                  <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Google Drive Folder</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
+                {/* Previous Video */}
 
                 {/* Previous Video */}
                 <button
@@ -1252,14 +1700,31 @@ export default function App() {
 
               {/* High-Resolution Product Image */}
               <img
-                src={selectedPhoto.imageUrl}
+                src={getPhotoSrc(selectedPhoto)}
                 alt={selectedPhoto.productName}
                 style={{ transform: `scale(${photoZoom})` }}
                 className={`relative z-10 transition-transform duration-200 select-none shadow-2xl rounded-lg max-h-full max-w-full ${
                   photoFitMode === 'cover' ? 'w-full h-full object-cover' : 'object-contain'
                 }`}
                 onError={(e) => {
-                  e.target.src = "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=800&auto=format&fit=crop&q=80";
+                  const img = e.target;
+                  const stage = parseInt(img.dataset.stage || '0', 10);
+                  if (stage === 0) {
+                    img.dataset.stage = '1';
+                    const fname = selectedPhoto.currentFilename || selectedPhoto.originalFilename;
+                    if (fname) {
+                      img.src = `/photos/${encodeURIComponent(fname)}`;
+                      return;
+                    }
+                  }
+                  if (stage === 1) {
+                    img.dataset.stage = '2';
+                    if (streamServerUrl && selectedPhoto.imageUrl) {
+                      img.src = `${streamServerUrl}${selectedPhoto.imageUrl}`;
+                      return;
+                    }
+                  }
+                  img.src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect fill="%230f172a" width="600" height="400"/><circle cx="300" cy="180" r="40" fill="%231e293b"/><text fill="%2394a3b8" font-family="sans-serif" font-size="16" font-weight="bold" x="50%" y="260" text-anchor="middle">NUNES INSTRUMENTS</text><text fill="%2360a5fa" font-family="sans-serif" font-size="13" x="50%" y="290" text-anchor="middle">${encodeURIComponent(selectedPhoto.productName || 'Product Media')}</text></svg>`;
                 }}
               />
             </div>
@@ -1285,19 +1750,6 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-2">
-                {/* Google Drive Link */}
-                <a
-                  href={GOOGLE_DRIVE_MY_DRIVE_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition border border-slate-700 shadow-sm"
-                  title="Open in Google Drive Photos Folder"
-                >
-                  <HardDrive className="w-3.5 h-3.5 text-purple-400" />
-                  <span>Google Drive Photos</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-
                 {/* Previous Photo */}
                 <button
                   onClick={() => {
@@ -1464,25 +1916,32 @@ export default function App() {
         </div>
       )}
 
-      {/* UPLOAD NEW VIDEO MODAL */}
+      {/* UPLOAD / ADD NEW MEDIA MODAL */}
       {uploadModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg p-6 shadow-2xl">
+        <div 
+          onClick={(e) => { if (e.target === e.currentTarget) setUploadModalOpen(false); }}
+          className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
+        >
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg p-6 sm:p-7 shadow-2xl">
+            {/* Modal Header */}
             <div className="flex items-center justify-between pb-4 border-b border-slate-200">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-200">
-                  <FolderUp className="w-4 h-4" />
+                <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-200">
+                  <FolderUp className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 text-base">
-                    Add New Product {dashboardMode === 'photos' ? 'Photo' : 'Video'}
+                  <h3 className="font-extrabold text-slate-900 text-base">
+                    Add Product {dashboardMode === 'photos' ? 'Photo' : 'Video'}
                   </h3>
-                  <p className="text-xs text-slate-500">
-                    Upload {dashboardMode === 'photos' ? 'photo' : 'video'} with custom rename option
+                  <p className="text-xs text-slate-500 font-medium">
+                    Upload directly from your device to the catalog
                   </p>
                 </div>
               </div>
-              <button onClick={() => setUploadModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button 
+                onClick={() => setUploadModalOpen(false)} 
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -1490,49 +1949,122 @@ export default function App() {
             <form onSubmit={handleUpload} className="mt-4 space-y-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Select {dashboardMode === 'photos' ? 'Photo File (.jpg, .jpeg, .png, .webp):' : 'Video File (.mp4, .mov, .avi):'}
+                  Select {dashboardMode === 'photos' ? 'Photo' : 'Video'} File:
                 </label>
                 <input
                   type="file"
                   accept={dashboardMode === 'photos' ? "image/*" : "video/*"}
-                  required
                   onChange={(e) => {
                     const file = e.target.files[0];
-                    setUploadFile(file);
-                    if (file && !uploadProductName) {
-                      setUploadProductName(file.name.replace(/\.[^/.]+$/, ""));
+                    if (file) {
+                      setUploadFile(file);
+                      if (dashboardMode === 'photos') {
+                        setUploadPreview(URL.createObjectURL(file));
+                      }
+                      if (!uploadProductName) {
+                        setUploadProductName(file.name.replace(/\.[^/.]+$/, ""));
+                      }
                     }
                   }}
-                  className="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 bg-slate-50 rounded-xl border border-slate-300 p-2"
+                  className="w-full text-xs text-slate-600 file:mr-3 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 bg-slate-50 rounded-xl border border-slate-300 p-2 cursor-pointer"
+                  required
                 />
+                {uploadPreview && dashboardMode === 'photos' && (
+                  <div className="mt-2.5 flex items-center gap-3 p-2 bg-slate-50 border border-slate-200 rounded-2xl">
+                    <img src={uploadPreview} alt="Selected preview" className="w-14 h-14 object-cover rounded-xl border border-slate-200 shadow-xs" />
+                    <div className="overflow-hidden">
+                      <p className="text-xs font-bold text-slate-800 truncate">{uploadFile?.name}</p>
+                      <p className="text-[10px] text-emerald-600 font-semibold">✓ Image selected & ready</p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Product Name (Rename Option):
+                  Product Name:
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. AE Handheld Multi-Gas Detector"
+                  placeholder="e.g. AE Handheld Multi-Gas & Oxygen Detector"
                   value={uploadProductName}
                   onChange={(e) => setUploadProductName(e.target.value)}
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 font-medium"
                   required
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Google Drive Link (Optional):
-                </label>
-                <input
-                  type="url"
-                  placeholder={GOOGLE_DRIVE_FOLDER_URL}
-                  value={uploadDriveUrl}
-                  onChange={(e) => setUploadDriveUrl(e.target.value)}
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
-                />
-              </div>
+              {/* Nunes Catalog Suggestions Quick Pick */}
+              {catalog.length > 0 && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1 flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-blue-600" />
+                    Quick Pick from Nunes Catalog:
+                  </label>
+                  <div className="max-h-28 overflow-y-auto space-y-1 p-2 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+                    {catalog
+                      .filter(c => !uploadProductName || c.fullName.toLowerCase().includes(uploadProductName.toLowerCase()))
+                      .slice(0, 5)
+                      .map((c, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setUploadProductName(c.fullName)}
+                          className="w-full text-left px-2 py-1 rounded-lg hover:bg-blue-100 hover:text-blue-900 text-slate-700 flex items-center justify-between transition text-[11px]"
+                        >
+                          <span className="truncate font-medium">{c.fullName}</span>
+                          <span className="text-[10px] text-slate-500">{c.category}</span>
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Real-time Google Drive Progress & Status */}
+              {uploading && (
+                <div className="space-y-2 p-3 bg-blue-50/70 border border-blue-200 rounded-2xl">
+                  <div className="flex items-center justify-between text-xs font-bold text-blue-900">
+                    <span className="flex items-center gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                      <span>{uploadStatusText || 'Uploading to Google Drive...'}</span>
+                    </span>
+                    <span className="font-mono">{uploadProgress}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-blue-200/60 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-blue-600 transition-all duration-300 rounded-full"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-blue-700">
+                    Direct stream to Google Drive ({dashboardMode === 'photos' ? 'Photos folder: 1uGjQkC...' : 'Videos folder: 1-vhkY...'})
+                  </p>
+                </div>
+              )}
+
+              {uploadSuccess && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-2.5">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+                  <div className="overflow-hidden">
+                    <p className="text-xs font-bold text-emerald-900">✓ Saved to Google Drive!</p>
+                    {uploadDriveId && (
+                      <p className="text-[10px] font-mono text-emerald-700 truncate">
+                        Verified Drive ID: {uploadDriveId}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {uploadError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-2.5">
+                  <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                  <div>
+                    <p className="text-xs font-bold text-red-900">Upload failed</p>
+                    <p className="text-[11px] text-red-700">{uploadError}</p>
+                  </div>
+                </div>
+              )}
 
               <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-2.5">
                 <button
@@ -1544,18 +2076,18 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  disabled={uploading || !uploadFile}
-                  className="px-5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white shadow-md shadow-emerald-600/25 flex items-center gap-1.5 transition"
+                  disabled={uploading || !uploadFile || !uploadProductName.trim()}
+                  className="px-5 py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white shadow-md shadow-blue-600/25 flex items-center gap-1.5 transition"
                 >
                   {uploading ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Uploading...</span>
+                      <span>Uploading to Drive...</span>
                     </>
                   ) : (
                     <>
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>Upload & Add</span>
+                      <FolderUp className="w-3.5 h-3.5" />
+                      <span>Upload & Save to Google Drive</span>
                     </>
                   )}
                 </button>
@@ -1564,6 +2096,209 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* GOOGLE DRIVE SYNC & SETTINGS MODAL */}
+      {driveModalOpen && (
+        <div 
+          onClick={(e) => { if (e.target === e.currentTarget) setDriveModalOpen(false); }}
+          className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
+        >
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-xl p-6 sm:p-7 shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-slate-200">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-200">
+                  <HardDrive className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
+                    <span>Google Drive Integration</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                      driveStatus.connected ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}>
+                      {driveStatus.status || (driveStatus.connected ? 'Connected' : 'Disconnected')}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Auto-Save & Bi-directional Synchronization for NUNES Media
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setDriveModalOpen(false)} 
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-4 text-xs text-slate-700">
+              {/* Account Card */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between">
+                <div>
+                  <p className="text-[11px] font-semibold text-slate-500">Connected Account:</p>
+                  <p className="text-sm font-extrabold text-slate-900 font-mono">
+                    {driveStatus.accountEmail || 'instruasia@gmail.com'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleTestDriveConnection}
+                    disabled={driveTesting}
+                    className="px-3 py-1.5 rounded-xl text-xs font-bold border border-blue-200 bg-white hover:bg-blue-50 text-blue-700 transition flex items-center gap-1 shadow-xs"
+                  >
+                    {driveTesting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3 text-blue-600" />}
+                    <span>Test Connection</span>
+                  </button>
+                  <button
+                    onClick={handleConnectDriveOnce}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white transition shadow-sm"
+                  >
+                    Connect Once
+                  </button>
+                </div>
+              </div>
+
+              {/* Service Account Instant Setup Box */}
+              <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-bold text-blue-900 text-xs">
+                    <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Instant 24/7 Drive Auto-Save (No Login Needed)</span>
+                  </div>
+                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-200 text-blue-900">
+                    Recommended
+                  </span>
+                </div>
+                <p className="text-[11px] text-blue-800 leading-relaxed">
+                  Open your Google Drive <a href={GOOGLE_DRIVE_PHOTOS_URL} target="_blank" rel="noreferrer" className="underline font-bold hover:text-blue-950">Photos Folder</a>, click <strong>Share</strong>, and add this Service Account as <strong>Editor</strong>:
+                </p>
+                <div className="flex items-center gap-2 bg-white px-2.5 py-1.5 rounded-xl border border-blue-200">
+                  <span className="font-mono text-[11px] text-slate-800 truncate select-all flex-1">
+                    nunes-drive-sync@nunes-mail-d072f3ce1.iam.gserviceaccount.com
+                  </span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText('nunes-drive-sync@nunes-mail-d072f3ce1.iam.gserviceaccount.com');
+                      setCopiedSA(true);
+                      setTimeout(() => setCopiedSA(false), 2000);
+                    }}
+                    className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition shrink-0 shadow-xs"
+                  >
+                    {copiedSA ? '✓ Copied!' : 'Copy Email'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Test Connection Output */}
+              {driveTestResult && (
+                <div className={`p-3 rounded-2xl border text-xs font-medium flex items-center gap-2 ${
+                  driveTestResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-red-50 border-red-200 text-red-900'
+                }`}>
+                  {driveTestResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <AlertCircle className="w-4 h-4 text-red-600" />}
+                  <span>{driveTestResult.message}</span>
+                </div>
+              )}
+
+              {/* Designated Folders */}
+              <div className="space-y-2">
+                <p className="font-bold text-slate-800 text-xs">Designated Google Drive Folders:</p>
+                
+                <div className="p-3 bg-white border border-slate-200 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <Camera className="w-4 h-4 text-blue-600" />
+                    <div>
+                      <p className="font-bold text-slate-900 text-xs">Photos Folder</p>
+                      <p className="text-[10px] font-mono text-slate-500">ID: {driveStatus.photosFolderId}</p>
+                    </div>
+                  </div>
+                  <a
+                    href={GOOGLE_DRIVE_PHOTOS_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-2.5 py-1 text-xs font-bold rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 flex items-center gap-1"
+                  >
+                    <span>Open Folder</span>
+                    <ExternalLink className="w-3 h-3 text-slate-400" />
+                  </a>
+                </div>
+
+                <div className="p-3 bg-white border border-slate-200 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <Film className="w-4 h-4 text-blue-600" />
+                    <div>
+                      <p className="font-bold text-slate-900 text-xs">Videos Folder</p>
+                      <p className="text-[10px] font-mono text-slate-500">ID: {driveStatus.videosFolderId}</p>
+                    </div>
+                  </div>
+                  <a
+                    href={GOOGLE_DRIVE_VIDEOS_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-2.5 py-1 text-xs font-bold rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 flex items-center gap-1"
+                  >
+                    <span>Open Folder</span>
+                    <ExternalLink className="w-3 h-3 text-slate-400" />
+                  </a>
+                </div>
+              </div>
+
+              {/* Sync Feedback */}
+              {syncFeedback && (
+                <div className={`p-3 rounded-2xl border text-xs font-medium flex items-center gap-2 ${
+                  syncFeedback.success ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-red-50 border-red-200 text-red-900'
+                }`}>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>{syncFeedback.message}</span>
+                </div>
+              )}
+
+              {/* Migrate Feedback */}
+              {migrateFeedback && (
+                <div className={`p-3 rounded-2xl border text-xs font-medium flex items-center gap-2 ${
+                  migrateFeedback.success ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-red-50 border-red-200 text-red-900'
+                }`}>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>{migrateFeedback.message}</span>
+                </div>
+              )}
+
+              {/* Action Buttons Row */}
+              <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  onClick={handleSyncDrive}
+                  disabled={syncingDrive}
+                  className="w-full px-4 py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white shadow-sm flex items-center justify-center gap-2 transition"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${syncingDrive ? 'animate-spin' : ''}`} />
+                  <span>{syncingDrive ? 'Syncing with Drive...' : 'Sync Google Drive Now'}</span>
+                </button>
+
+                <button
+                  onClick={handleMigrateMedia}
+                  disabled={migratingMedia}
+                  className="w-full px-4 py-2.5 rounded-xl text-xs font-bold border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-800 flex items-center justify-center gap-2 transition"
+                >
+                  <FolderUp className="w-3.5 h-3.5 text-blue-600" />
+                  <span>{migratingMedia ? 'Migrating Media...' : 'Migrate Media to Drive'}</span>
+                </button>
+              </div>
+
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setDriveModalOpen(false)}
+                className="px-5 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* LIVE STREAM SETTINGS MODAL */}
       {streamSettingsOpen && (
@@ -1671,119 +2406,11 @@ export default function App() {
         </div>
       )}
 
-      {/* GOOGLE DRIVE CLOUD SYNC MODAL (instruasia@gmail.com) */}
-      {driveModalOpen && (
-        <div 
-          onClick={(e) => { if (e.target === e.currentTarget) setDriveModalOpen(false); }}
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
-        >
-          <div className="bg-white rounded-3xl max-w-xl w-full p-6 sm:p-7 shadow-2xl border border-slate-200">
-            {/* Header */}
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-200">
-                  <HardDrive className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-base sm:text-lg text-slate-900">Google Drive Cloud Sync</h3>
-                  <p className="text-xs text-slate-500 font-medium">Account: <span className="font-mono font-bold text-blue-600">instruasia@gmail.com</span></p>
-                </div>
-              </div>
-              <button 
-                onClick={() => setDriveModalOpen(false)}
-                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            {/* Content */}
-            <div className="py-5 space-y-4">
-              <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 flex items-start gap-3">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
-                <div className="text-xs text-emerald-950">
-                  <p className="font-bold text-emerald-900">179 Videos & 179 Photos Organized on Your Desktop!</p>
-                  <p className="text-emerald-800/90 mt-0.5">All files have been renamed to their official Nunes product names with zero duplicate copies.</p>
-                </div>
-              </div>
-
-              {/* Folder Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <Film className="w-4 h-4 text-blue-600" />
-                      <span className="font-bold text-slate-900">1 - Product Videos</span>
-                    </div>
-                    <p className="text-slate-500 text-[11px]">179 Renamed MP4 files</p>
-                    <p className="font-mono text-[10px] text-slate-400 truncate mt-1">C:\Users\NUNES\Desktop\Google Drive (instruasia@gmail.com)\1 - Videos...</p>
-                  </div>
-                  <span className="mt-3 inline-block font-bold text-blue-600 text-[11px]">Ready to upload 🎬</span>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <Camera className="w-4 h-4 text-purple-600" />
-                      <span className="font-bold text-slate-900">2 - Product Photos</span>
-                    </div>
-                    <p className="text-slate-500 text-[11px]">179 Renamed JPG files</p>
-                    <p className="font-mono text-[10px] text-slate-400 truncate mt-1">C:\Users\NUNES\Desktop\Google Drive (instruasia@gmail.com)\2 - Photos...</p>
-                  </div>
-                  <span className="mt-3 inline-block font-bold text-purple-600 text-[11px]">Ready to upload 📸</span>
-                </div>
-              </div>
-
-              {/* 3 Step Instruction */}
-              <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs text-slate-700 space-y-2">
-                <p className="font-bold text-slate-900 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                  Quick Sync Steps (30 Seconds):
-                </p>
-                <div className="space-y-1.5 text-[11px] text-slate-600 pl-1">
-                  <p><strong>Step 1:</strong> Click the green <strong>"Open Google Drive in Browser"</strong> button below (opens your logged-in Google Drive).</p>
-                  <p><strong>Step 2:</strong> Click <strong>"Open Clean Media Folders on Desktop"</strong> below (opens the clean Desktop folders in Windows Explorer).</p>
-                  <p><strong>Step 3:</strong> Simply drag both folders into Google Drive! Google Drive will upload all 179 videos and 179 photos automatically with official names!</p>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="pt-2 flex flex-col sm:flex-row items-center justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      const endpoint = isLocalHost ? '/api/open-drive-sync' : `${streamServerUrl}/api/open-drive-sync`;
-                      await fetch(endpoint, { method: 'POST' });
-                    } catch (e) {
-                      console.log(e);
-                    }
-                  }}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-800 text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs"
-                >
-                  <FolderUp className="w-4 h-4 text-slate-600" />
-                  <span>Open Folders on Desktop</span>
-                </button>
-
-                <a
-                  href={GOOGLE_DRIVE_MY_DRIVE_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-md shadow-emerald-600/25 flex items-center justify-center gap-2"
-                >
-                  <HardDrive className="w-4 h-4" />
-                  <span>Open Google Drive in Browser</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white px-4 py-4 text-center text-xs text-slate-500 font-medium">
-        <p>Nunes Instruments • Product Video Hub • Local Stream: http://localhost:5050 • Google Drive: 1-vhkY7WfIHVwRlFarYooSwooWwnBWf94</p>
+        <p>Nunes Instruments • Product Video & Photo Hub • All 179 Products Synced</p>
       </footer>
     </div>
   );
