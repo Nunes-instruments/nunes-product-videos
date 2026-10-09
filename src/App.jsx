@@ -1,3 +1,5 @@
+import DrivePanel from './DrivePanel';
+import { connectDrive, disconnectDrive, isDriveConnected, loadGoogleIdentity, prepareFolders, listMedia, uploadMedia, mergeMedia, newestFirst, renameDriveMedia } from './drive';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Search, Play, Edit3, Upload, Film, CheckCircle2, Clock, 
@@ -24,7 +26,7 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState('all'); // all, renamed, pending
   const [selectedCategory, setSelectedCategory] = useState('All');
-  const [sortBy, setSortBy] = useState('name-asc');
+  const [sortBy, setSortBy] = useState('newest');
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
@@ -93,7 +95,6 @@ export default function App() {
   // Upload modal states
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadProductName, setUploadProductName] = useState('');
-  const [uploadDriveUrl, setUploadDriveUrl] = useState('');
   const [uploading, setUploading] = useState(false);
 
   // Fetch initial data
@@ -114,7 +115,7 @@ export default function App() {
         const fallbackRes = await fetch('/videos_data.json');
         loadedVideos = await fallbackRes.json();
       }
-      setVideos(loadedVideos);
+      setVideos(previous => mergeMedia(loadedVideos, previous.filter(item => item.driveFileId)));
 
       // Fetch photos
       try {
@@ -122,7 +123,7 @@ export default function App() {
         const pRes = await fetch(photoEndpoint);
         if (pRes.ok) {
           const pData = await pRes.json();
-          setPhotos(pData.photos || []);
+          setPhotos(previous => mergeMedia(pData.photos || [], previous.filter(item => item.driveFileId)));
         } else {
           throw new Error('Photo API error');
         }
@@ -130,7 +131,7 @@ export default function App() {
         const fbRes = await fetch('/photos_data.json');
         if (fbRes.ok) {
           const pData = await fbRes.json();
-          setPhotos(pData || []);
+          setPhotos(previous => mergeMedia(pData || [], previous.filter(item => item.driveFileId)));
         }
       }
 
@@ -205,6 +206,7 @@ export default function App() {
     });
 
     return list.sort((a, b) => {
+      if (sortBy === 'newest') return newestFirst(a, b);
       if (sortBy === 'name-asc') return (a.productName || '').localeCompare(b.productName || '');
       if (sortBy === 'name-desc') return (b.productName || '').localeCompare(a.productName || '');
       if (sortBy === 'size-desc') return (b.sizeMb || 0) - (a.sizeMb || 0);
@@ -231,6 +233,7 @@ export default function App() {
     });
 
     return list.sort((a, b) => {
+      if (sortBy === 'newest') return newestFirst(a, b);
       if (sortBy === 'name-asc') return (a.productName || '').localeCompare(b.productName || '');
       if (sortBy === 'name-desc') return (b.productName || '').localeCompare(a.productName || '');
       if (sortBy === 'size-desc') return (b.sizeMb || 0) - (a.sizeMb || 0);
@@ -262,6 +265,18 @@ export default function App() {
   // Save Rename (works for both video and photo)
   const handleSaveRename = async () => {
     if (!newTitle.trim() || !renameTarget) return;
+    if (renameTarget.driveFileId && !renameTarget.filePath) {
+      setIsRenaming(true);
+      try {
+        const item = await renameDriveMedia(renameTarget, newTitle);
+        (dashboardMode === 'photos' ? setPhotos : setVideos)(previous => previous.map(old => old.id === item.id ? item : old));
+        if (selectedPhoto?.id === item.id) setSelectedPhoto(item);
+        if (selectedVideo?.id === item.id) setSelectedVideo(item);
+        setRenameModalOpen(false);
+      } catch (error) { alert('Rename failed: ' + error.message); }
+      finally { setIsRenaming(false); }
+      return;
+    }
     setIsRenaming(true);
     try {
       const isPhoto = dashboardMode === 'photos' || (renameTarget.id && renameTarget.id.startsWith('photo_'));
@@ -308,50 +323,97 @@ export default function App() {
     }
   };
 
-  // Upload handler (works for both video and photo)
-  const handleUpload = async (e) => {
-    e.preventDefault();
-    if (!uploadFile) return;
-
-    setUploading(true);
-    const formData = new FormData();
-    const isPhoto = dashboardMode === 'photos';
-    if (isPhoto) {
-      formData.append('photo', uploadFile);
-    } else {
-      formData.append('video', uploadFile);
-    }
-    formData.append('productName', uploadProductName || uploadFile.name);
-    formData.append('driveUrl', uploadDriveUrl);
-
+  const [driveSettings, setDriveSettings] = useState(() => {
+    const defaults = { clientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || '', root: '1-vhkY7WfIHVwRlFarYooSwooWwnBWf94', videos: '', photos: '' };
+    try { return { ...defaults, ...JSON.parse(localStorage.getItem('nunes_drive_settings') || '{}') }; } catch { return defaults; }
+  });
+  const [driveConnected, setDriveConnected] = useState(false);
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [driveProgress, setDriveProgress] = useState('');
+  const [driveError, setDriveError] = useState('');
+  const [driveResults, setDriveResults] = useState([]);
+  const driveFolders = useRef(null);
+  const stopBackup = useRef(false);
+  const operationLock = useRef(false);
+  useEffect(() => {
+    loadGoogleIdentity().catch(error => setDriveError(error.message));
+    const timer = setInterval(() => { if (!isDriveConnected()) setDriveConnected(false); }, 10000);
+    return () => clearInterval(timer);
+  }, []);
+  const refreshDrive = async (folders = driveFolders.current) => {
+    const media = await listMedia(folders);
+    setVideos(previous => mergeMedia(previous, media.videos));
+    setPhotos(previous => mergeMedia(previous, media.photos));
+  };
+  const handleDriveConnect = async settings => {
+    if (operationLock.current) return;
+    operationLock.current = true;
+    setDriveBusy(true); setDriveError('');
     try {
-      const endpoint = isLocalHost 
-        ? (isPhoto ? '/api/upload-photo' : '/api/upload')
-        : `${streamServerUrl}${isPhoto ? '/api/upload-photo' : '/api/upload'}`;
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (res.ok) {
-        const result = await res.json();
-        if (isPhoto) {
-          setPhotos(prev => [result.item, ...prev]);
-        } else {
-          setVideos(prev => [result.item, ...prev]);
+      await connectDrive(settings.clientId.trim());
+      const folders = await prepareFolders(settings);
+      driveFolders.current = folders;
+      const savedSettings = { ...settings, ...folders };
+      localStorage.setItem('nunes_drive_settings', JSON.stringify(savedSettings));
+      setDriveSettings(savedSettings); setDriveConnected(true);
+      await refreshDrive(folders);
+      setDriveProgress('Account and destination folders verified. Ready to upload.');
+    } catch (error) { disconnectDrive(); setDriveConnected(false); setDriveError(error.message); }
+    finally { setDriveBusy(false); operationLock.current = false; }
+  };
+  const backupExisting = async () => {
+    if (operationLock.current) return;
+    operationLock.current = true;
+    setDriveBusy(true); setDriveError(''); setDriveResults([]); stopBackup.current = false;
+    let saved = 0, failed = 0;
+    try {
+      if (!isDriveConnected()) throw new Error('Connect Google Drive before backing up.');
+      const remote = await listMedia(driveFolders.current);
+      const known = new Set([...remote.videos, ...remote.photos].map(item => item.id));
+      for (const [kind, items] of [['videos', videos], ['photos', photos]]) {
+        for (const item of items) {
+          if (stopBackup.current) break;
+          if (known.has(item.id) || item.driveFileId) continue;
+          try {
+            setDriveProgress(`Backing up ${item.productName}…`);
+            const source = kind === 'photos' ? item.imageUrl : `${isLocalHost ? '' : streamServerUrl}/api/stream/${encodeURIComponent(item.id)}`;
+            if (!source) throw new Error('Original media source is missing.');
+            const response = await fetch(source, { signal: AbortSignal.timeout(300000) });
+            if (!response.ok) throw new Error('Original file is unavailable. Start the PC stream server and retry.');
+            const blob = await response.blob();
+            const file = new File([blob], item.currentFilename || item.originalFilename, { type: blob.type });
+            const result = await uploadMedia(file, item.productName, item.id, kind, driveFolders.current[kind], percent => setDriveProgress(`${item.productName} · ${percent}%`));
+            (kind === 'photos' ? setPhotos : setVideos)(previous => mergeMedia(previous, [result]));
+            known.add(item.id); saved++;
+            setDriveResults(previous => [...previous, { name: item.productName, ok: true, message: 'Saved and verified in Drive' }]);
+          } catch (error) {
+            failed++;
+            setDriveResults(previous => [...previous, { name: item.productName, ok: false, message: error.message }]);
+            if (!isDriveConnected()) { stopBackup.current = true; setDriveConnected(false); }
+          }
         }
-        setUploadModalOpen(false);
-        setUploadFile(null);
-        setUploadProductName('');
-        setUploadDriveUrl('');
-      } else {
-        alert('Server upload error. Make sure local stream server is running.');
       }
-    } catch (err) {
-      alert('Upload failed: ' + err.message);
-    } finally {
-      setUploading(false);
-    }
+      setDriveProgress(`${stopBackup.current ? 'Stopped' : 'Backup finished'} · ${saved} saved · ${failed} failed. Retry skips files already saved.`);
+    } catch (error) { setDriveError(error.message); }
+    finally { setDriveBusy(false); operationLock.current = false; }
+  };
+  const handleUpload = async e => {
+    e.preventDefault();
+    if (!uploadFile || operationLock.current) return;
+    if (!isDriveConnected()) { setDriveConnected(false); setDriveModalOpen(true); setDriveError('Connect Drive first, then return to Upload.'); return; }
+    operationLock.current = true;
+    setUploading(true); setDriveError('');
+    try {
+      const kind = dashboardMode;
+      const bytes = new TextEncoder().encode(`${uploadFile.name}:${uploadFile.size}:${uploadFile.lastModified}`);
+      const digest = await crypto.subtle.digest('SHA-256', bytes);
+      const key = 'upload_' + [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+      const item = await uploadMedia(uploadFile, uploadProductName || uploadFile.name, key, kind, driveFolders.current[kind], percent => setDriveProgress(`Uploading to Drive · ${percent}%`));
+      (kind === 'photos' ? setPhotos : setVideos)(previous => mergeMedia(previous, [item]));
+      setSortBy('newest'); setDriveProgress('Saved and verified in Google Drive.');
+      setUploadModalOpen(false); setUploadFile(null); setUploadProductName('');
+    } catch (error) { setDriveError(error.message); if (!isDriveConnected()) setDriveConnected(false); }
+    finally { setUploading(false); operationLock.current = false; }
   };
 
   // Check if selected video is vertical portrait
@@ -646,6 +708,7 @@ export default function App() {
                 onChange={(e) => setSortBy(e.target.value)}
                 className="bg-slate-50 hover:bg-white text-xs font-bold text-slate-800 border border-slate-300 rounded-xl px-2.5 py-1.5 focus:ring-2 focus:ring-blue-600 focus:outline-none shadow-xs"
               >
+                <option value="newest">Latest uploads first</option>
                 <option value="name-asc">🔤 Name (A → Z)</option>
                 <option value="name-desc">🔤 Name (Z → A)</option>
                 <option value="size-desc">📦 Size (Largest First)</option>
@@ -659,6 +722,10 @@ export default function App() {
 
       {/* Main Content Area - White Product Boxes Grid */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 lg:px-8 py-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-slate-200 rounded-2xl p-4 mb-5 shadow-sm">
+          <div><p className="text-sm font-bold text-slate-900">Product media · Google Drive backup</p><p className="text-xs text-slate-500 mt-1">instruasia@gmail.com · {driveConnected ? 'Connected' : 'Connection required'} · {sortBy === 'newest' ? 'Latest uploads first' : 'Custom sorting'}</p></div>
+          <button onClick={() => setDriveModalOpen(true)} className="rounded-xl bg-blue-700 px-4 py-2 text-white text-xs font-bold">{driveConnected ? 'Manage backup' : 'Connect Drive'}</button>
+        </div>
         
         {loading ? (
           <div className="flex flex-col items-center justify-center py-28 gap-3">
@@ -692,12 +759,12 @@ export default function App() {
                 {/* Video Profile Thumbnail Poster Image */}
                 <div className="relative aspect-video w-full bg-slate-900 overflow-hidden">
                   <img
-                    src={video.thumbnailUrl}
+                    src={video.thumbnailUrl || '/media-placeholder.svg'}
                     alt={video.productName}
                     loading="lazy"
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     onError={(e) => {
-                      e.target.src = "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=600&auto=format&fit=crop&q=60";
+                      e.target.src = "/media-placeholder.svg";
                     }}
                   />
 
@@ -805,12 +872,12 @@ export default function App() {
                   {/* Photo Display Frame */}
                   <div className="relative aspect-video w-full bg-slate-100 overflow-hidden flex items-center justify-center">
                     <img
-                      src={photo.imageUrl}
+                      src={photo.imageUrl || '/media-placeholder.svg'}
                       alt={photo.productName}
                       loading="lazy"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       onError={(e) => {
-                        e.target.src = "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=600&auto=format&fit=crop&q=60";
+                        e.target.src = "/media-placeholder.svg";
                       }}
                     />
 
@@ -997,7 +1064,7 @@ export default function App() {
               />
 
               {/* Native HTML5 Video Player */}
-              <video
+              {selectedVideo.driveFileId ? <iframe title={selectedVideo.productName} src={`https://drive.google.com/file/d/${selectedVideo.driveFileId}/preview`} className="relative z-10 w-full h-full border-0" allow="autoplay; fullscreen" allowFullScreen /> : <video
                 key={selectedVideo.id}
                 ref={videoRef}
                 controls
@@ -1026,10 +1093,10 @@ export default function App() {
                   type="video/mp4" 
                 />
                 Your browser does not support HTML5 video streaming.
-              </video>
+              </video>}
 
               {/* Helpful overlay when on Vercel without local server */}
-              {videoPlayError && (
+              {videoPlayError && !selectedVideo.driveFileId && (
                 <div className="absolute inset-0 z-20 bg-slate-950/90 flex flex-col items-center justify-center p-6 text-center text-white backdrop-blur-md">
                   <Film className="w-12 h-12 text-blue-400 mb-3" />
                   <h4 className="text-base font-bold text-white mb-1">
@@ -1092,7 +1159,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 {/* Google Drive Link */}
                 <a
-                  href={GOOGLE_DRIVE_FOLDER_URL}
+                  href={selectedVideo.driveUrl || GOOGLE_DRIVE_FOLDER_URL}
                   target="_blank"
                   rel="noreferrer"
                   className="px-3 py-1.5 rounded-xl bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 font-semibold flex items-center gap-1.5 transition"
@@ -1229,7 +1296,7 @@ export default function App() {
 
                 {/* Download */}
                 <a
-                  href={selectedPhoto.imageUrl}
+                  href={selectedPhoto.driveUrl || selectedPhoto.imageUrl}
                   download={selectedPhoto.currentFilename || "product-photo.jpg"}
                   className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
                   title="Download Photo"
@@ -1251,7 +1318,7 @@ export default function App() {
               />
 
               {/* High-Resolution Product Image */}
-              <img
+              {selectedPhoto.driveFileId ? <iframe title={selectedPhoto.productName} src={`https://drive.google.com/file/d/${selectedPhoto.driveFileId}/preview`} className="relative z-10 w-full h-full border-0" allowFullScreen /> : <img
                 src={selectedPhoto.imageUrl}
                 alt={selectedPhoto.productName}
                 style={{ transform: `scale(${photoZoom})` }}
@@ -1259,9 +1326,9 @@ export default function App() {
                   photoFitMode === 'cover' ? 'w-full h-full object-cover' : 'object-contain'
                 }`}
                 onError={(e) => {
-                  e.target.src = "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=800&auto=format&fit=crop&q=80";
+                  e.target.src = "/media-placeholder.svg";
                 }}
-              />
+              />}
             </div>
 
             {/* Photo Modal Footer */}
@@ -1287,7 +1354,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 {/* Google Drive Link */}
                 <a
-                  href={GOOGLE_DRIVE_MY_DRIVE_URL}
+                  href={selectedPhoto.driveUrl || GOOGLE_DRIVE_MY_DRIVE_URL}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition border border-slate-700 shadow-sm"
@@ -1521,17 +1588,11 @@ export default function App() {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Google Drive Link (Optional):
-                </label>
-                <input
-                  type="url"
-                  placeholder={GOOGLE_DRIVE_FOLDER_URL}
-                  value={uploadDriveUrl}
-                  onChange={(e) => setUploadDriveUrl(e.target.value)}
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600"
-                />
+              <div className="rounded-xl bg-blue-50 p-3 text-xs text-blue-900">
+                Files save to instruasia@gmail.com → {dashboardMode === 'photos' ? 'Photos' : 'Videos'}.
+                {!driveConnected && <button type="button" onClick={() => setDriveModalOpen(true)} className="block mt-2 font-bold underline">Connect Google Drive</button>}
+                <p role="status" className="mt-2">{driveProgress}</p>
+                {driveError && <p role="alert" className="text-red-700 mt-2">{driveError}</p>}
               </div>
 
               <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-2.5">
@@ -1544,7 +1605,7 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  disabled={uploading || !uploadFile}
+                  disabled={uploading || driveBusy || !uploadFile}
                   className="px-5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white shadow-md shadow-emerald-600/25 flex items-center gap-1.5 transition"
                 >
                   {uploading ? (
@@ -1671,115 +1732,10 @@ export default function App() {
         </div>
       )}
 
-      {/* GOOGLE DRIVE CLOUD SYNC MODAL (instruasia@gmail.com) */}
-      {driveModalOpen && (
-        <div 
-          onClick={(e) => { if (e.target === e.currentTarget) setDriveModalOpen(false); }}
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
-        >
-          <div className="bg-white rounded-3xl max-w-xl w-full p-6 sm:p-7 shadow-2xl border border-slate-200">
-            {/* Header */}
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-200">
-                  <HardDrive className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-base sm:text-lg text-slate-900">Google Drive Cloud Sync</h3>
-                  <p className="text-xs text-slate-500 font-medium">Account: <span className="font-mono font-bold text-blue-600">instruasia@gmail.com</span></p>
-                </div>
-              </div>
-              <button 
-                onClick={() => setDriveModalOpen(false)}
-                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="py-5 space-y-4">
-              <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 flex items-start gap-3">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
-                <div className="text-xs text-emerald-950">
-                  <p className="font-bold text-emerald-900">179 Videos & 179 Photos Organized on Your Desktop!</p>
-                  <p className="text-emerald-800/90 mt-0.5">All files have been renamed to their official Nunes product names with zero duplicate copies.</p>
-                </div>
-              </div>
-
-              {/* Folder Cards */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <Film className="w-4 h-4 text-blue-600" />
-                      <span className="font-bold text-slate-900">1 - Product Videos</span>
-                    </div>
-                    <p className="text-slate-500 text-[11px]">179 Renamed MP4 files</p>
-                    <p className="font-mono text-[10px] text-slate-400 truncate mt-1">C:\Users\NUNES\Desktop\Google Drive (instruasia@gmail.com)\1 - Videos...</p>
-                  </div>
-                  <span className="mt-3 inline-block font-bold text-blue-600 text-[11px]">Ready to upload 🎬</span>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <Camera className="w-4 h-4 text-purple-600" />
-                      <span className="font-bold text-slate-900">2 - Product Photos</span>
-                    </div>
-                    <p className="text-slate-500 text-[11px]">179 Renamed JPG files</p>
-                    <p className="font-mono text-[10px] text-slate-400 truncate mt-1">C:\Users\NUNES\Desktop\Google Drive (instruasia@gmail.com)\2 - Photos...</p>
-                  </div>
-                  <span className="mt-3 inline-block font-bold text-purple-600 text-[11px]">Ready to upload 📸</span>
-                </div>
-              </div>
-
-              {/* 3 Step Instruction */}
-              <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs text-slate-700 space-y-2">
-                <p className="font-bold text-slate-900 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                  Quick Sync Steps (30 Seconds):
-                </p>
-                <div className="space-y-1.5 text-[11px] text-slate-600 pl-1">
-                  <p><strong>Step 1:</strong> Click the green <strong>"Open Google Drive in Browser"</strong> button below (opens your logged-in Google Drive).</p>
-                  <p><strong>Step 2:</strong> Click <strong>"Open Clean Media Folders on Desktop"</strong> below (opens the clean Desktop folders in Windows Explorer).</p>
-                  <p><strong>Step 3:</strong> Simply drag both folders into Google Drive! Google Drive will upload all 179 videos and 179 photos automatically with official names!</p>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="pt-2 flex flex-col sm:flex-row items-center justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      const endpoint = isLocalHost ? '/api/open-drive-sync' : `${streamServerUrl}/api/open-drive-sync`;
-                      await fetch(endpoint, { method: 'POST' });
-                    } catch (e) {
-                      console.log(e);
-                    }
-                  }}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-800 text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs"
-                >
-                  <FolderUp className="w-4 h-4 text-slate-600" />
-                  <span>Open Folders on Desktop</span>
-                </button>
-
-                <a
-                  href={GOOGLE_DRIVE_MY_DRIVE_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-md shadow-emerald-600/25 flex items-center justify-center gap-2"
-                >
-                  <HardDrive className="w-4 h-4" />
-                  <span>Open Google Drive in Browser</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {driveModalOpen && <DrivePanel settings={driveSettings} connected={driveConnected} busy={driveBusy || uploading} progress={driveProgress} error={driveError} results={driveResults}
+        onClose={() => setDriveModalOpen(false)} onConnect={handleDriveConnect} onBackup={backupExisting} onStop={() => { stopBackup.current = true; }}
+        onDisconnect={() => { disconnectDrive(); setDriveConnected(false); driveFolders.current = null; setDriveProgress('Disconnected.'); }}
+        onRefresh={async () => { if (operationLock.current) return; operationLock.current = true; setDriveBusy(true); setDriveError(''); try { await refreshDrive(); setDriveProgress('Drive media refreshed.'); } catch (error) { setDriveError(error.message); } finally { setDriveBusy(false); operationLock.current = false; } }} />}
 
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white px-4 py-4 text-center text-xs text-slate-500 font-medium">
