@@ -76,6 +76,15 @@ app.get('/api/catalog', (req, res) => {
   res.json([]);
 });
 
+// Helper to open Google Drive sync folders on desktop
+app.post('/api/open-drive-sync', (req, res) => {
+  const scriptPath = path.join(__dirname, 'open_google_drive_sync.ps1');
+  exec(`powershell -ExecutionPolicy Bypass -File "${scriptPath}"`, (err) => {
+    if (err) console.error('Error opening drive sync:', err);
+  });
+  res.json({ success: true, message: 'Opened Google Drive and Clean Media Folder' });
+});
+
 // 3. Rename product video
 app.post('/api/rename', (req, res) => {
   const { id, newProductName, renameFileOnDisk = true } = req.body;

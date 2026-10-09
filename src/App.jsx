@@ -5,7 +5,7 @@ import {
   ChevronRight, ChevronLeft, RefreshCw, Eye, Tag, AlertCircle,
   Download, Volume2, Info, Maximize2, Minimize2, MoveHorizontal,
   Smartphone, Monitor, Copy, Check, Radio, Settings,
-  Camera, Image as ImageIcon, ZoomIn, ZoomOut
+  Camera, Image as ImageIcon, ZoomIn, ZoomOut, ArrowLeft, ArrowUpDown
 } from 'lucide-react';
 
 const GOOGLE_DRIVE_FOLDER_URL = "https://drive.google.com/drive/u/0/folders/1-vhkY7WfIHVwRlFarYooSwooWwnBWf94";
@@ -23,6 +23,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState('all'); // all, renamed, pending
+  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [sortBy, setSortBy] = useState('name-asc');
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [renameModalOpen, setRenameModalOpen] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
@@ -159,37 +161,83 @@ export default function App() {
     fetchData();
   }, []);
 
-  // Filtered videos
+  // Global Escape key listener to close modals
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setSelectedVideo(null);
+        setSelectedPhoto(null);
+        setRenameModalOpen(false);
+        setUploadModalOpen(false);
+        setDriveModalOpen(false);
+        setStreamSettingsOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Compute unique categories for current media mode
+  const categories = useMemo(() => {
+    const set = new Set();
+    const list = dashboardMode === 'videos' ? videos : photos;
+    list.forEach(item => {
+      if (item.category) set.add(item.category);
+    });
+    return ['All', ...Array.from(set).sort()];
+  }, [videos, photos, dashboardMode]);
+
+  // Filtered & Sorted videos
   const filteredVideos = useMemo(() => {
-    return videos.filter(v => {
-      const q = searchTerm.toLowerCase();
+    const q = searchTerm.toLowerCase();
+    let list = videos.filter(v => {
       const matchesSearch = 
+        !q ||
         (v.productName && v.productName.toLowerCase().includes(q)) ||
         (v.currentFilename && v.currentFilename.toLowerCase().includes(q)) ||
         (v.originalFilename && v.originalFilename.toLowerCase().includes(q)) ||
         (v.category && v.category.toLowerCase().includes(q));
 
-      if (activeTab === 'renamed') return matchesSearch && v.isRenamed;
-      if (activeTab === 'pending') return matchesSearch && !v.isRenamed;
+      if (activeTab === 'renamed' && !v.isRenamed) return false;
+      if (activeTab === 'pending' && v.isRenamed) return false;
+      if (selectedCategory !== 'All' && v.category !== selectedCategory) return false;
       return matchesSearch;
     });
-  }, [videos, searchTerm, activeTab]);
 
-  // Filtered photos
+    return list.sort((a, b) => {
+      if (sortBy === 'name-asc') return (a.productName || '').localeCompare(b.productName || '');
+      if (sortBy === 'name-desc') return (b.productName || '').localeCompare(a.productName || '');
+      if (sortBy === 'size-desc') return (b.sizeMb || 0) - (a.sizeMb || 0);
+      if (sortBy === 'size-asc') return (a.sizeMb || 0) - (b.sizeMb || 0);
+      return 0;
+    });
+  }, [videos, searchTerm, activeTab, selectedCategory, sortBy]);
+
+  // Filtered & Sorted photos
   const filteredPhotos = useMemo(() => {
-    return photos.filter(p => {
-      const q = searchTerm.toLowerCase();
+    const q = searchTerm.toLowerCase();
+    let list = photos.filter(p => {
       const matchesSearch = 
+        !q ||
         (p.productName && p.productName.toLowerCase().includes(q)) ||
         (p.currentFilename && p.currentFilename.toLowerCase().includes(q)) ||
         (p.originalFilename && p.originalFilename.toLowerCase().includes(q)) ||
         (p.category && p.category.toLowerCase().includes(q));
 
-      if (activeTab === 'renamed') return matchesSearch && p.isRenamed;
-      if (activeTab === 'pending') return matchesSearch && !p.isRenamed;
+      if (activeTab === 'renamed' && !p.isRenamed) return false;
+      if (activeTab === 'pending' && p.isRenamed) return false;
+      if (selectedCategory !== 'All' && p.category !== selectedCategory) return false;
       return matchesSearch;
     });
-  }, [photos, searchTerm, activeTab]);
+
+    return list.sort((a, b) => {
+      if (sortBy === 'name-asc') return (a.productName || '').localeCompare(b.productName || '');
+      if (sortBy === 'name-desc') return (b.productName || '').localeCompare(a.productName || '');
+      if (sortBy === 'size-desc') return (b.sizeMb || 0) - (a.sizeMb || 0);
+      if (sortBy === 'size-asc') return (a.sizeMb || 0) - (b.sizeMb || 0);
+      return 0;
+    });
+  }, [photos, searchTerm, activeTab, selectedCategory, sortBy]);
 
   const currentTotal = dashboardMode === 'videos' ? videos.length : photos.length;
   const currentRenamed = dashboardMode === 'videos' 
@@ -461,6 +509,17 @@ export default function App() {
               <ExternalLink className="w-3 h-3 text-emerald-600" />
             </a>
 
+            {/* Google Drive Sync Helper for instruasia@gmail.com */}
+            <button
+              onClick={() => setDriveModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-300 transition shadow-sm"
+              title="Google Drive Sync Helper (instruasia@gmail.com)"
+            >
+              <HardDrive className="w-3.5 h-3.5 text-blue-600" />
+              <span className="hidden lg:inline">Drive Sync</span>
+              <span className="text-[10px] bg-blue-200/80 px-1.5 py-0.5 rounded font-black text-blue-900">instruasia</span>
+            </button>
+
             <button
               onClick={() => setUploadModalOpen(true)}
               className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-600/25 transition transform active:scale-95"
@@ -475,63 +534,124 @@ export default function App() {
 
       {/* Filter and Metrics Strip */}
       <section className="bg-white border-b border-slate-200 px-4 lg:px-8 py-3">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div className="max-w-7xl mx-auto flex flex-col gap-3">
           
-          {/* Quick Counter Tabs */}
-          <div className="flex items-center flex-wrap gap-2">
-            <button 
-              onClick={() => setActiveTab('all')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
-                activeTab === 'all' 
-                  ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
-                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-              }`}
-            >
-              {dashboardMode === 'videos' ? <Film className="w-3.5 h-3.5" /> : <Camera className="w-3.5 h-3.5" />}
-              <span>Total {dashboardMode === 'videos' ? 'Videos' : 'Photos'}:</span>
-              <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-800'}`}>
-                {currentTotal}
-              </span>
-            </button>
-
-            <button 
-              onClick={() => setActiveTab('renamed')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
-                activeTab === 'renamed' 
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
-                  : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
-              }`}
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Identified & Named:</span>
-              <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'renamed' ? 'bg-white/20 text-white' : 'bg-emerald-200/80 text-emerald-900'}`}>
-                {currentRenamed}
-              </span>
-            </button>
-
-            {currentPending > 0 && (
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            {/* Quick Counter Tabs */}
+            <div className="flex items-center flex-wrap gap-2">
               <button 
-                onClick={() => setActiveTab('pending')}
+                onClick={() => setActiveTab('all')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
-                  activeTab === 'pending' 
-                    ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
-                    : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                  activeTab === 'all' 
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                <Clock className="w-3.5 h-3.5 text-amber-600" />
-                <span>Needs Review:</span>
-                <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'pending' ? 'bg-white/20 text-white' : 'bg-amber-200/80 text-amber-900'}`}>
-                  {currentPending}
+                {dashboardMode === 'videos' ? <Film className="w-3.5 h-3.5" /> : <Camera className="w-3.5 h-3.5" />}
+                <span>Total {dashboardMode === 'videos' ? 'Videos' : 'Photos'}:</span>
+                <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-800'}`}>
+                  {currentTotal}
                 </span>
               </button>
-            )}
+
+              <button 
+                onClick={() => setActiveTab('renamed')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                  activeTab === 'renamed' 
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
+                    : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                }`}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Identified & Named:</span>
+                <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'renamed' ? 'bg-white/20 text-white' : 'bg-emerald-200/80 text-emerald-900'}`}>
+                  {currentRenamed}
+                </span>
+              </button>
+
+              {currentPending > 0 && (
+                <button 
+                  onClick={() => setActiveTab('pending')}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+                    activeTab === 'pending' 
+                      ? 'bg-amber-600 text-white border-amber-600 shadow-sm' 
+                      : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Needs Review:</span>
+                  <span className={`px-2 py-0.5 rounded-md text-xs font-black ${activeTab === 'pending' ? 'bg-white/20 text-white' : 'bg-amber-200/80 text-amber-900'}`}>
+                    {currentPending}
+                  </span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 text-xs text-slate-600 font-medium">
+              <span className="flex items-center gap-1.5 bg-blue-50 text-blue-800 px-3 py-1 rounded-lg border border-blue-200">
+                <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                <span>{dashboardMode === 'videos' ? 'Click card to play in Full-Fit Screen' : 'Click photo card for HD Lightbox & Zoom'}</span>
+              </span>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-slate-600 font-medium">
-            <span className="flex items-center gap-1.5 bg-blue-50 text-blue-800 px-3 py-1 rounded-lg border border-blue-200">
-              <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-              <span>{dashboardMode === 'videos' ? 'Click card to play in Full-Fit Screen' : 'Click photo card for HD Lightbox & Zoom'}</span>
-            </span>
+          {/* Category Filter Pills & Sort Selector */}
+          <div className="w-full pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-slate-500 font-bold flex items-center gap-1 mr-1">
+                <Filter className="w-3.5 h-3.5 text-blue-600" />
+                Category:
+              </span>
+              {categories.slice(0, 6).map((cat, i) => (
+                <button
+                  key={i}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition border ${
+                    selectedCategory === cat
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+              {categories.length > 6 && (
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="bg-slate-50 hover:bg-white text-[11px] font-bold text-slate-700 border border-slate-200 rounded-lg px-2 py-1 focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                >
+                  <option value="All">More Categories...</option>
+                  {categories.slice(6).map((cat, i) => (
+                    <option key={i} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              )}
+              {selectedCategory !== 'All' && (
+                <button
+                  onClick={() => setSelectedCategory('All')}
+                  className="text-[11px] text-blue-600 hover:underline font-bold ml-1"
+                >
+                  Clear filter
+                </button>
+              )}
+            </div>
+
+            {/* Sort Selector */}
+            <div className="flex items-center gap-1.5 text-xs text-slate-600 font-semibold ml-auto">
+              <ArrowUpDown className="w-3.5 h-3.5 text-blue-600" />
+              <span>Sort:</span>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="bg-slate-50 hover:bg-white text-xs font-bold text-slate-800 border border-slate-300 rounded-xl px-2.5 py-1.5 focus:ring-2 focus:ring-blue-600 focus:outline-none shadow-xs"
+              >
+                <option value="name-asc">🔤 Name (A → Z)</option>
+                <option value="name-desc">🔤 Name (Z → A)</option>
+                <option value="size-desc">📦 Size (Largest First)</option>
+                <option value="size-asc">📦 Size (Smallest First)</option>
+              </select>
+            </div>
           </div>
 
         </div>
@@ -777,7 +897,10 @@ export default function App() {
 
       {/* FULL-FIT HD VIDEO PLAYER MODAL - Dynamic Adaptive Width & Full Screen */}
       {selectedVideo && (
-        <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-2 sm:p-4">
+        <div 
+          onClick={(e) => { if (e.target === e.currentTarget) setSelectedVideo(null); }}
+          className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-2 sm:p-4"
+        >
           <div 
             className={`bg-slate-900 border border-slate-800 rounded-3xl w-full flex flex-col overflow-hidden shadow-2xl transition-all duration-300 ${
               isTheaterMode 
@@ -788,66 +911,78 @@ export default function App() {
             }`}
           >
             
-            {/* Modal Header */}
-            <div className="p-3.5 sm:px-6 border-b border-slate-800 flex items-center justify-between bg-slate-950/95 text-white">
-              <div className="flex-1 pr-3">
+            {/* Top Navigation Row: Big prominent "← Back to Dashboard" button */}
+            <div className="p-3 sm:px-6 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 text-white">
+              <button
+                onClick={() => setSelectedVideo(null)}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-blue-600/30 transition transform hover:-translate-x-0.5 active:scale-95"
+                title="Return to Dashboard (or press Esc)"
+              >
+                <ArrowLeft className="w-4 h-4 sm:w-5 h-5 stroke-[2.5]" />
+                <span>← Back to Dashboard</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => openRename(selectedVideo)}
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition"
+                  title="Rename product video"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-blue-400" />
+                  <span className="hidden sm:inline">Rename</span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedVideo(null)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold border border-slate-700 transition"
+                  title="Close Video (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                  <span className="hidden sm:inline">Close</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Sub-Header: Product Title & Screen Controls */}
+            <div className="px-4 py-2.5 border-b border-slate-800/80 bg-slate-900/95 flex flex-wrap items-center justify-between gap-2 text-white">
+              <div className="flex-1 min-w-[200px]">
                 <div className="flex items-center gap-2">
-                  <h2 className="text-sm sm:text-base font-bold text-white truncate">{selectedVideo.productName}</h2>
+                  <h2 className="text-xs sm:text-sm font-bold text-white truncate max-w-md">{selectedVideo.productName}</h2>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 whitespace-nowrap">
                     {selectedVideo.category || "Testing Machine"}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">
+                <p className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">
                   {selectedVideo.currentFilename} • {selectedVideo.sizeMb} MB
                 </p>
               </div>
 
               {/* View Controls */}
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                {/* True Fullscreen Toggle */}
+              <div className="flex items-center gap-1.5">
                 <button
                   onClick={toggleFullScreen}
                   className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-semibold flex items-center gap-1.5 transition"
                   title="Full Screen (Entire Screen)"
                 >
                   <Maximize2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="text-[11px] hidden sm:inline">Fullscreen</span>
+                  <span className="text-[11px] hidden md:inline">Fullscreen</span>
                 </button>
 
-                {/* Fit Mode Toggle: Fill 100% vs Fit Aspect */}
                 <button
                   onClick={() => setVideoFitMode(prev => prev === 'contain' ? 'cover' : 'contain')}
                   className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-semibold flex items-center gap-1.5 transition"
-                  title="Toggle Full Fit (Corner to Corner) vs Aspect Fit"
+                  title="Toggle Full Fit vs Aspect Fit"
                 >
                   <MoveHorizontal className="w-3.5 h-3.5 text-blue-400" />
                   <span className="text-[11px]">{videoFitMode === 'cover' ? 'Full Fill' : 'Fit Screen'}</span>
                 </button>
 
-                {/* Theater Mode Toggle */}
                 <button
                   onClick={() => setIsTheaterMode(prev => !prev)}
-                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
                   title={isTheaterMode ? "Exit Theater Mode" : "Expand to Full Page Theater Mode"}
                 >
                   {isTheaterMode ? <Minimize2 className="w-4 h-4 text-amber-400" /> : <Monitor className="w-4 h-4 text-blue-400" />}
-                </button>
-
-                {/* Rename Button */}
-                <button
-                  onClick={() => openRename(selectedVideo)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition shadow-sm"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Rename</span>
-                </button>
-
-                {/* Close Button */}
-                <button
-                  onClick={() => setSelectedVideo(null)}
-                  className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
-                >
-                  <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
@@ -939,10 +1074,19 @@ export default function App() {
 
             {/* Modal Bottom Strip with Navigation & Drive Shortcut */}
             <div className="p-3.5 sm:px-6 bg-slate-950/95 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-white">
-              <div className="flex items-center gap-4 text-slate-300">
+              <button
+                onClick={() => setSelectedVideo(null)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold border border-slate-700 shadow-sm transition"
+                title="Return to Dashboard (or press Esc)"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 stroke-[2.5]" />
+                <span>← Back to Dashboard</span>
+              </button>
+
+              <div className="hidden md:flex items-center gap-4 text-slate-300">
                 <span>Duration: <strong className="text-white">{selectedVideo.durationSec}s</strong></span>
                 <span>Size: <strong className="text-white">{selectedVideo.sizeMb} MB</strong></span>
-                <span className="hidden sm:inline">Recorded: <strong className="text-white">{selectedVideo.createdAt}</strong></span>
+                <span className="hidden lg:inline">Recorded: <strong className="text-white">{selectedVideo.createdAt}</strong></span>
               </div>
 
               <div className="flex items-center gap-2">
@@ -992,38 +1136,73 @@ export default function App() {
 
       {/* FULL-FIT HD PHOTO LIGHTBOX MODAL */}
       {selectedPhoto && (
-        <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-2 sm:p-4">
+        <div 
+          onClick={(e) => { if (e.target === e.currentTarget) { setSelectedPhoto(null); setPhotoZoom(1); } }}
+          className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex items-center justify-center p-2 sm:p-4"
+        >
           <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden shadow-2xl transition-all duration-300">
             
-            {/* Modal Header */}
-            <div className="p-3.5 sm:px-6 border-b border-slate-800 flex items-center justify-between bg-slate-950/95 text-white">
-              <div className="flex-1 pr-3">
+            {/* Top Navigation Row: Big prominent "← Back to Dashboard" button */}
+            <div className="p-3 sm:px-6 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 text-white">
+              <button
+                onClick={() => { setSelectedPhoto(null); setPhotoZoom(1); }}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-purple-600/30 transition transform hover:-translate-x-0.5 active:scale-95"
+                title="Return to Dashboard (or press Esc)"
+              >
+                <ArrowLeft className="w-4 h-4 sm:w-5 h-5 stroke-[2.5]" />
+                <span>← Back to Dashboard</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => openRename(selectedPhoto)}
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition"
+                  title="Rename product photo"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Rename</span>
+                </button>
+
+                <button
+                  onClick={() => { setSelectedPhoto(null); setPhotoZoom(1); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold border border-slate-700 transition"
+                  title="Close Photo (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                  <span className="hidden sm:inline">Close</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Sub-Header: Product Title & Controls */}
+            <div className="px-4 py-2.5 border-b border-slate-800/80 bg-slate-900/95 flex flex-wrap items-center justify-between gap-2 text-white">
+              <div className="flex-1 min-w-[200px]">
                 <div className="flex items-center gap-2">
-                  <h2 className="text-sm sm:text-base font-bold text-white truncate">{selectedPhoto.productName}</h2>
+                  <h2 className="text-xs sm:text-sm font-bold text-white truncate max-w-md">{selectedPhoto.productName}</h2>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 whitespace-nowrap">
                     {selectedPhoto.category || "Testing Equipment"}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">
+                <p className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">
                   {selectedPhoto.currentFilename} • {selectedPhoto.width} × {selectedPhoto.height} • {selectedPhoto.sizeMb} MB
                 </p>
               </div>
 
               {/* View Controls */}
-              <div className="flex items-center gap-1.5 sm:gap-2">
+              <div className="flex items-center gap-1.5">
                 {/* Zoom Out */}
                 <button
                   onClick={() => setPhotoZoom(z => Math.max(0.5, Number((z - 0.25).toFixed(2))))}
-                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
                   title="Zoom Out"
                 >
-                  <ZoomOut className="w-4 h-4 text-slate-300" />
+                  <ZoomOut className="w-3.5 h-3.5 text-slate-300" />
                 </button>
 
                 {/* Zoom Level Reset Badge */}
                 <button
                   onClick={() => setPhotoZoom(1)}
-                  className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] font-mono font-bold text-slate-300 border border-slate-700 transition"
+                  className="px-2 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-[10px] font-mono font-bold text-slate-300 border border-slate-700 transition"
                   title="Reset Zoom to 100%"
                 >
                   {Math.round(photoZoom * 100)}%
@@ -1032,48 +1211,31 @@ export default function App() {
                 {/* Zoom In */}
                 <button
                   onClick={() => setPhotoZoom(z => Math.min(3.0, Number((z + 0.25).toFixed(2))))}
-                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
                   title="Zoom In"
                 >
-                  <ZoomIn className="w-4 h-4 text-purple-400" />
+                  <ZoomIn className="w-3.5 h-3.5 text-purple-400" />
                 </button>
 
                 {/* Fit Mode Toggle */}
                 <button
                   onClick={() => setPhotoFitMode(prev => prev === 'contain' ? 'cover' : 'contain')}
-                  className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-semibold flex items-center gap-1.5 transition"
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-semibold flex items-center gap-1 transition"
                   title="Toggle Full Fill vs Aspect Fit"
                 >
                   <MoveHorizontal className="w-3.5 h-3.5 text-blue-400" />
-                  <span className="text-[11px] hidden sm:inline">{photoFitMode === 'cover' ? 'Full Fill' : 'Fit Screen'}</span>
+                  <span className="text-[10px] hidden sm:inline">{photoFitMode === 'cover' ? 'Full Fill' : 'Fit Screen'}</span>
                 </button>
 
                 {/* Download */}
                 <a
                   href={selectedPhoto.imageUrl}
                   download={selectedPhoto.currentFilename || "product-photo.jpg"}
-                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+                  className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
                   title="Download Photo"
                 >
-                  <Download className="w-4 h-4 text-emerald-400" />
+                  <Download className="w-3.5 h-3.5 text-emerald-400" />
                 </a>
-
-                {/* Rename Button */}
-                <button
-                  onClick={() => openRename(selectedPhoto)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition shadow-sm"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Rename</span>
-                </button>
-
-                {/* Close Button */}
-                <button
-                  onClick={() => { setSelectedPhoto(null); setPhotoZoom(1); }}
-                  className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
-                >
-                  <X className="w-5 h-5" />
-                </button>
               </div>
             </div>
 
@@ -1103,12 +1265,21 @@ export default function App() {
             </div>
 
             {/* Photo Modal Footer */}
-            <div className="p-3 sm:px-6 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-              <div className="flex items-center gap-3">
+            <div className="p-3 sm:px-6 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+              <button
+                onClick={() => { setSelectedPhoto(null); setPhotoZoom(1); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold border border-slate-700 shadow-sm transition"
+                title="Return to Dashboard (or press Esc)"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 stroke-[2.5]" />
+                <span>← Back to Dashboard</span>
+              </button>
+
+              <div className="hidden md:flex items-center gap-3">
                 <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold">
                   <CheckCircle2 className="w-3.5 h-3.5" /> Ready in Gallery
                 </span>
-                <span className="hidden md:inline font-mono text-[11px] text-slate-500 truncate max-w-xs">
+                <span className="font-mono text-[11px] text-slate-500 truncate max-w-xs">
                   {selectedPhoto.filePath || "Product Photos"}
                 </span>
               </div>
@@ -1494,6 +1665,116 @@ export default function App() {
                     Save & Reconnect
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GOOGLE DRIVE CLOUD SYNC MODAL (instruasia@gmail.com) */}
+      {driveModalOpen && (
+        <div 
+          onClick={(e) => { if (e.target === e.currentTarget) setDriveModalOpen(false); }}
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
+        >
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 sm:p-7 shadow-2xl border border-slate-200">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-200">
+                  <HardDrive className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base sm:text-lg text-slate-900">Google Drive Cloud Sync</h3>
+                  <p className="text-xs text-slate-500 font-medium">Account: <span className="font-mono font-bold text-blue-600">instruasia@gmail.com</span></p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setDriveModalOpen(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="py-5 space-y-4">
+              <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 flex items-start gap-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-emerald-950">
+                  <p className="font-bold text-emerald-900">179 Videos & 179 Photos Organized on Your Desktop!</p>
+                  <p className="text-emerald-800/90 mt-0.5">All files have been renamed to their official Nunes product names with zero duplicate copies.</p>
+                </div>
+              </div>
+
+              {/* Folder Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <Film className="w-4 h-4 text-blue-600" />
+                      <span className="font-bold text-slate-900">1 - Product Videos</span>
+                    </div>
+                    <p className="text-slate-500 text-[11px]">179 Renamed MP4 files</p>
+                    <p className="font-mono text-[10px] text-slate-400 truncate mt-1">C:\Users\NUNES\Desktop\Google Drive (instruasia@gmail.com)\1 - Videos...</p>
+                  </div>
+                  <span className="mt-3 inline-block font-bold text-blue-600 text-[11px]">Ready to upload 🎬</span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <Camera className="w-4 h-4 text-purple-600" />
+                      <span className="font-bold text-slate-900">2 - Product Photos</span>
+                    </div>
+                    <p className="text-slate-500 text-[11px]">179 Renamed JPG files</p>
+                    <p className="font-mono text-[10px] text-slate-400 truncate mt-1">C:\Users\NUNES\Desktop\Google Drive (instruasia@gmail.com)\2 - Photos...</p>
+                  </div>
+                  <span className="mt-3 inline-block font-bold text-purple-600 text-[11px]">Ready to upload 📸</span>
+                </div>
+              </div>
+
+              {/* 3 Step Instruction */}
+              <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs text-slate-700 space-y-2">
+                <p className="font-bold text-slate-900 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                  Quick Sync Steps (30 Seconds):
+                </p>
+                <div className="space-y-1.5 text-[11px] text-slate-600 pl-1">
+                  <p><strong>Step 1:</strong> Click the green <strong>"Open Google Drive in Browser"</strong> button below (opens your logged-in Google Drive).</p>
+                  <p><strong>Step 2:</strong> Click <strong>"Open Clean Media Folders on Desktop"</strong> below (opens the clean Desktop folders in Windows Explorer).</p>
+                  <p><strong>Step 3:</strong> Simply drag both folders into Google Drive! Google Drive will upload all 179 videos and 179 photos automatically with official names!</p>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex flex-col sm:flex-row items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const endpoint = isLocalHost ? '/api/open-drive-sync' : `${streamServerUrl}/api/open-drive-sync`;
+                      await fetch(endpoint, { method: 'POST' });
+                    } catch (e) {
+                      console.log(e);
+                    }
+                  }}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-800 text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs"
+                >
+                  <FolderUp className="w-4 h-4 text-slate-600" />
+                  <span>Open Folders on Desktop</span>
+                </button>
+
+                <a
+                  href={GOOGLE_DRIVE_MY_DRIVE_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-md shadow-emerald-600/25 flex items-center justify-center gap-2"
+                >
+                  <HardDrive className="w-4 h-4" />
+                  <span>Open Google Drive in Browser</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
               </div>
             </div>
           </div>
