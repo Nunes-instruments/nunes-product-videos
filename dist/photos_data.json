@@ -1,5 +1,34 @@
 [
   {
+    "id": "photo_drive_1Io8x83-",
+    "originalFilename": "14164.jpg",
+    "currentFilename": "14164.jpg",
+    "productName": "14164",
+    "isRenamed": true,
+    "imageUrl": "https://lh3.googleusercontent.com/drive-storage/AJQWtBMon1uDBsKipRbBbsBfjWoHYHo3WAENhuaMfSGAvp1YTrVq--w2Moq3HQKcWPSije7khvJN8jIF-u_-HrgIOrZuvQ-t7omH9ao2w6JB6vwqwORk5Q=s220",
+    "sizeMb": 0.6,
+    "driveId": "1Io8x83-7DRUpuXzUAOEFtdkcBGUDci8g",
+    "driveUrl": "https://drive.google.com/file/d/1Io8x83-7DRUpuXzUAOEFtdkcBGUDci8g/view?usp=drivesdk",
+    "isSyncedToDrive": true,
+    "category": "Testing Equipment",
+    "createdAt": "2026-10-09T09:07:05.313Z"
+  },
+  {
+    "id": "photo_179",
+    "originalFilename": "14302.jpg",
+    "currentFilename": "14302.jpg",
+    "productName": "14302",
+    "isRenamed": true,
+    "imageUrl": "/photos/photo_179.jpg",
+    "filePath": "C:\\Users\\NUNES\\Desktop\\photos\\14302.jpg",
+    "sizeMb": 4.59,
+    "category": "Testing Equipment",
+    "driveUrl": "https://drive.google.com/file/d/1EaoJbJaQti8pfU1U6eov_weZnvEZ-8xw/view?usp=drivesdk",
+    "createdAt": "2026-10-09T10:09:21.186Z",
+    "driveId": "1EaoJbJaQti8pfU1U6eov_weZnvEZ-8xw",
+    "isSyncedToDrive": true
+  },
+  {
     "id": "photo_vid_001",
     "originalFilename": "vid_001.jpg",
     "currentFilename": "ThermoPro Digital Temperature Sensor.jpg",
@@ -283,21 +312,6 @@
     "height": 850,
     "driveUrl": "",
     "createdAt": "2026-04-06 16:11:56"
-  },
-  {
-    "id": "photo_vid_020",
-    "originalFilename": "vid_020.jpg",
-    "currentFilename": "Acto-Photometer Activity Cage Apparatus.jpg",
-    "productName": "Acto-Photometer Activity Cage Apparatus",
-    "isRenamed": true,
-    "imageUrl": "/photos/vid_020.jpg",
-    "filePath": "C:\\Users\\NUNES\\Desktop\\Product Photos\\Acto-Photometer Activity Cage Apparatus.jpg",
-    "sizeMb": 0.03,
-    "category": "Pharmacology",
-    "width": 848,
-    "height": 478,
-    "driveUrl": "",
-    "createdAt": "2026-04-06 16:11:57"
   },
   {
     "id": "photo_vid_021",
@@ -1292,11 +1306,11 @@
   {
     "id": "photo_vid_087",
     "originalFilename": "vid_087.jpg",
-    "currentFilename": "Hydraulic Pressure Gauge Tester 0-14 kg_cm\u00b2.jpg",
-    "productName": "Hydraulic Pressure Gauge Tester 0-14 kg/cm\u00b2",
+    "currentFilename": "Hydraulic Pressure Gauge Tester 0-14 kg_cm².jpg",
+    "productName": "Hydraulic Pressure Gauge Tester 0-14 kg/cm²",
     "isRenamed": true,
     "imageUrl": "/photos/vid_087.jpg",
-    "filePath": "C:\\Users\\NUNES\\Desktop\\Product Photos\\Hydraulic Pressure Gauge Tester 0-14 kg_cm\u00b2.jpg",
+    "filePath": "C:\\Users\\NUNES\\Desktop\\Product Photos\\Hydraulic Pressure Gauge Tester 0-14 kg_cm².jpg",
     "sizeMb": 0.05,
     "category": "Pressure Testing",
     "width": 478,
