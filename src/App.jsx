@@ -5,7 +5,7 @@ import {
   ChevronRight, ChevronLeft, RefreshCw, Eye, Tag, AlertCircle,
   Download, Volume2, Info, Maximize2, Minimize2, MoveHorizontal,
   Smartphone, Monitor, Copy, Check, Radio, Settings,
-  Camera, Image as ImageIcon, ZoomIn, ZoomOut, ArrowLeft, ArrowUpDown, Trash2
+  Camera, Image as ImageIcon, ZoomIn, ZoomOut, ArrowLeft, ArrowUpDown, Trash2, Cloud
 } from 'lucide-react';
 
 const GOOGLE_DRIVE_PHOTOS_URL = "https://drive.google.com/drive/folders/1uGjQkCgdCgiqsE-1Ri_aNC4-X2FSlA43?usp=drive_link";
@@ -38,6 +38,7 @@ export default function App() {
   const [videoFitMode, setVideoFitMode] = useState('cover'); // 'cover' fills 100%, 'contain' fits with aspect
   const [isTheaterMode, setIsTheaterMode] = useState(false);
   const [videoPlayError, setVideoPlayError] = useState(false);
+  const [videoSourceMode, setVideoSourceMode] = useState('drive'); // 'drive' (24/7 cloud) or 'local'
   const videoRef = useRef(null);
 
   const isLocalHost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
@@ -486,6 +487,11 @@ export default function App() {
   const handlePlayVideo = (video) => {
     setVideoPlayError(false);
     setSelectedVideo(video);
+    if (video.driveId || video.driveUrl) {
+      setVideoSourceMode('drive');
+    } else {
+      setVideoSourceMode('local');
+    }
   };
 
   // Open rename
@@ -1132,14 +1138,18 @@ export default function App() {
                 {/* Video Profile Thumbnail Poster Image */}
                 <div className="relative aspect-video w-full bg-slate-900 overflow-hidden">
                   <img
-                    src={video.thumbnailUrl?.startsWith('http') || video.thumbnailUrl?.startsWith('data:') ? video.thumbnailUrl : `${isLocalHost ? '' : streamServerUrl}${video.thumbnailUrl}`}
+                    src={video.thumbnailUrl?.startsWith('http') || video.thumbnailUrl?.startsWith('data:') 
+                      ? video.thumbnailUrl 
+                      : (video.driveThumbnail || video.thumbnailUrl || '/thumbnails/vid_001.jpg')}
                     alt={video.productName}
                     loading="lazy"
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     onError={(e) => {
-                      if (!e.target.dataset.triedTunnel && video.thumbnailUrl) {
-                        e.target.dataset.triedTunnel = 'true';
-                        e.target.src = `${streamServerUrl}${video.thumbnailUrl}`;
+                      if (video.driveThumbnail && e.target.src !== video.driveThumbnail) {
+                        e.target.src = video.driveThumbnail;
+                      } else if (video.thumbnailUrl && !e.target.dataset.triedFallback) {
+                        e.target.dataset.triedFallback = 'true';
+                        e.target.src = video.thumbnailUrl;
                       }
                     }}
                   />
@@ -1162,11 +1172,16 @@ export default function App() {
                     </span>
                   )}
 
-                  {/* Status Badge */}
-                  <div className="absolute top-2.5 left-2.5">
+                  {/* Status & Cloud Badges */}
+                  <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 flex-wrap">
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-500 text-white px-2 py-0.5 rounded-full shadow-sm">
                       <CheckCircle2 className="w-3 h-3" /> Named
                     </span>
+                    {(video.driveId || video.isSyncedToDrive) && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-blue-600/95 text-white px-2 py-0.5 rounded-full shadow-sm backdrop-blur-xs">
+                        <Cloud className="w-3 h-3" /> 24/7 Cloud
+                      </span>
+                    )}
                   </div>
 
                   {/* File Size Badge */}
@@ -1426,8 +1441,41 @@ export default function App() {
                 </p>
               </div>
 
-              {/* View Controls */}
+              {/* View Controls & Drive Player Switcher */}
               <div className="flex items-center gap-1.5">
+                {/* 24/7 Cloud Player Toggle */}
+                {(selectedVideo.driveId || selectedVideo.driveUrl) && (
+                  <button
+                    onClick={() => {
+                      setVideoPlayError(false);
+                      setVideoSourceMode(prev => prev === 'drive' ? 'local' : 'drive');
+                    }}
+                    className={`px-2.5 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 shadow-sm ${
+                      videoSourceMode === 'drive' 
+                        ? 'bg-blue-600 text-white border-blue-500' 
+                        : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                    }`}
+                    title="Switch between 24/7 Google Drive Cloud Player and Local System Stream"
+                  >
+                    <Cloud className="w-3.5 h-3.5 text-sky-300" />
+                    <span className="text-[11px]">{videoSourceMode === 'drive' ? 'Drive Cloud' : 'Local Stream'}</span>
+                  </button>
+                )}
+
+                {/* Direct Google Drive Link */}
+                {selectedVideo.driveUrl && (
+                  <a
+                    href={selectedVideo.driveUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-semibold flex items-center gap-1 transition shadow-sm"
+                    title="Open directly in Google Drive"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-blue-400" />
+                    <span className="text-[11px] hidden sm:inline">Drive</span>
+                  </a>
+                )}
+
                 <button
                   onClick={toggleFullScreen}
                   className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-semibold flex items-center gap-1.5 transition"
@@ -1462,42 +1510,54 @@ export default function App() {
               {/* Soft Ambient Blurred Poster in Background */}
               <div 
                 className="absolute inset-0 bg-cover bg-center opacity-30 blur-2xl transform scale-125 pointer-events-none"
-                style={{ backgroundImage: `url(${selectedVideo.thumbnailUrl})` }}
+                style={{ backgroundImage: `url(${selectedVideo.thumbnailUrl || selectedVideo.driveThumbnail})` }}
               />
 
-              {/* Native HTML5 Video Player */}
-              <video
-                key={selectedVideo.id}
-                ref={videoRef}
-                controls
-                autoPlay
-                playsInline
-                preload="auto"
-                onError={() => setVideoPlayError(true)}
-                className={`relative z-10 w-full h-full transition-all duration-200 ${
-                  videoFitMode === 'cover' ? 'object-cover' : 'object-contain'
-                }`}
-                poster={selectedVideo.thumbnailUrl}
-              >
-                {/* 1. Primary Live Edge Stream URL (Live Vercel via Cloudflare Edge / Localhost) */}
-                <source 
-                  src={isLocalHost ? `/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}` : `${streamServerUrl}/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}`} 
-                  type="video/mp4" 
+              {/* 1. Google Drive Cloud Player (Plays 24/7 without needing local machine or tunnel) */}
+              {videoSourceMode === 'drive' && (selectedVideo.driveId || selectedVideo.driveUrl) ? (
+                <iframe
+                  key={selectedVideo.driveId || selectedVideo.id}
+                  src={`https://drive.google.com/file/d/${selectedVideo.driveId || selectedVideo.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1]}/preview`}
+                  className="relative z-10 w-full h-full border-0 rounded-lg shadow-2xl"
+                  allow="autoplay; encrypted-media; fullscreen"
+                  allowFullScreen
+                  title={selectedVideo.productName}
                 />
-                {/* 2. Direct byte-range stream via tunnel */}
-                <source 
-                  src={isLocalHost ? `/api/stream/${selectedVideo.id}` : `${streamServerUrl}/api/stream/${selectedVideo.id}`} 
-                  type="video/mp4" 
-                />
-                {/* 3. Static relative fallback */}
-                <source 
-                  src={`/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}`} 
-                  type="video/mp4" 
-                />
-                Your browser does not support HTML5 video streaming.
-              </video>
+              ) : (
+                /* 2. Native HTML5 Video Player (Streaming from local machine / tunnel) */
+                <video
+                  key={selectedVideo.id}
+                  ref={videoRef}
+                  controls
+                  autoPlay
+                  playsInline
+                  preload="auto"
+                  onError={() => setVideoPlayError(true)}
+                  className={`relative z-10 w-full h-full transition-all duration-200 ${
+                    videoFitMode === 'cover' ? 'object-cover' : 'object-contain'
+                  }`}
+                  poster={selectedVideo.thumbnailUrl || selectedVideo.driveThumbnail}
+                >
+                  {/* Primary Live Edge Stream URL */}
+                  <source 
+                    src={isLocalHost ? `/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}` : `${streamServerUrl}/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}`} 
+                    type="video/mp4" 
+                  />
+                  {/* Direct byte-range stream via tunnel */}
+                  <source 
+                    src={isLocalHost ? `/api/stream/${selectedVideo.id}` : `${streamServerUrl}/api/stream/${selectedVideo.id}`} 
+                    type="video/mp4" 
+                  />
+                  {/* Static relative fallback */}
+                  <source 
+                    src={`/raw-videos/${encodeURIComponent(selectedVideo.currentFilename || selectedVideo.originalFilename)}`} 
+                    type="video/mp4" 
+                  />
+                  Your browser does not support HTML5 video streaming.
+                </video>
+              )}
 
-              {/* Helpful overlay when on Vercel without local server */}
+              {/* Helpful overlay when local streaming is disconnected */}
               {videoPlayError && (
                 <div className="absolute inset-0 z-20 bg-slate-950/90 flex flex-col items-center justify-center p-6 text-center text-white backdrop-blur-md">
                   <Film className="w-12 h-12 text-blue-400 mb-3" />
@@ -1505,26 +1565,42 @@ export default function App() {
                     {selectedVideo.productName}
                   </h4>
                   <p className="text-xs text-slate-300 max-w-md mb-4 leading-relaxed">
-                    This HD video file ({selectedVideo.sizeMb} MB) is streaming from your system.
+                    Local system stream is currently paused. You can play this video directly from Google Drive 24/7.
                   </p>
                   
                   <div className="flex flex-wrap items-center justify-center gap-3">
+                    {(selectedVideo.driveId || selectedVideo.driveUrl) && (
+                      <button
+                        onClick={() => {
+                          setVideoPlayError(false);
+                          setVideoSourceMode('drive');
+                        }}
+                        className="px-4 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-lg flex items-center gap-1.5 transition"
+                      >
+                        <Play className="w-4 h-4 fill-current" />
+                        <span>Play via Google Drive (24/7 Cloud)</span>
+                      </button>
+                    )}
+
+                    {selectedVideo.driveUrl && (
+                      <a
+                        href={selectedVideo.driveUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-lg flex items-center gap-1.5 transition"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        <span>Open in Google Drive</span>
+                      </a>
+                    )}
+
                     <button
                       onClick={() => setStreamSettingsOpen(true)}
-                      className="px-4 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white rounded-xl shadow-lg flex items-center gap-1.5 transition"
+                      className="px-4 py-2 text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white rounded-xl shadow-lg flex items-center gap-1.5 transition"
                     >
                       <Settings className="w-4 h-4" />
-                      <span>Check Stream Server</span>
+                      <span>Check Local Stream</span>
                     </button>
-
-                    <a
-                      href={`http://localhost:5050`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-4 py-2 text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white rounded-xl shadow-lg transition"
-                    >
-                      ⚡ Open Localhost
-                    </a>
                   </div>
                 </div>
               )}

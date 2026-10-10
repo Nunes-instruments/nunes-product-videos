@@ -8,8 +8,9 @@ import shutil
 import json
 
 SOURCE_DIR = r"C:\Users\NUNES\Desktop\New folder"
-DATA_FILE = os.path.join(os.path.dirname(__file__), "public", "videos_data.json")
-GOOGLE_DRIVE_FOLDER_URL = "https://drive.google.com/drive/u/0/folders/1-vhkY7WfIHVwRlFarYooSwooWwnBWf94"
+GOOGLE_DRIVE_VIDEOS_URL = "https://drive.google.com/drive/folders/1-vhkY7WfIHVwRlFarYooSwooWwnBWf94?usp=drive_link"
+GOOGLE_DRIVE_PHOTOS_URL = "https://drive.google.com/drive/folders/1uGjQkCgdCgiqsE-1Ri_aNC4-X2FSlA43?usp=drive_link"
+GOOGLE_DRIVE_FOLDER_URL = GOOGLE_DRIVE_VIDEOS_URL
 
 def print_status():
     if not os.path.exists(DATA_FILE):
