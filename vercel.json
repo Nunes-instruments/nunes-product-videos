@@ -9,8 +9,20 @@
       "destination": "/api/drive-auth"
     },
     {
-      "source": "/api/drive/test-connection",
-      "destination": "/api/drive-auth"
+      "source": "/api/drive/initiate-video-upload",
+      "destination": "/api/drive-initiate"
+    },
+    {
+      "source": "/api/drive/initiate",
+      "destination": "/api/drive-initiate"
+    },
+    {
+      "source": "/api/drive/make-public",
+      "destination": "/api/drive-make-public"
+    },
+    {
+      "source": "/api/drive/delete",
+      "destination": "/api/drive-delete"
     },
     {
       "source": "/api/(.*)",

@@ -46,8 +46,9 @@ export default function App() {
 
   const getPhotoSrc = (p) => {
     if (!p) return '';
-    if (p.imageUrl?.startsWith('data:') || p.imageUrl?.startsWith('http')) return p.imageUrl;
-    if (p.thumbnailUrl?.startsWith('data:')) return p.thumbnailUrl;
+    if (p.imageUrl?.startsWith('data:') || p.imageUrl?.startsWith('http') || p.imageUrl?.startsWith('blob:')) return p.imageUrl;
+    if (p.thumbnailUrl?.startsWith('data:') || p.thumbnailUrl?.startsWith('http') || p.thumbnailUrl?.startsWith('blob:')) return p.thumbnailUrl;
+    if (p.driveId && p.driveId !== 'syncing') return `https://drive.google.com/thumbnail?id=${p.driveId}&sz=w1200`;
     if (p.imageUrl && p.imageUrl.startsWith('/photos/')) return p.imageUrl;
     const fname = p.currentFilename || p.originalFilename;
     if (fname) return `/photos/${encodeURIComponent(fname)}`;
@@ -105,7 +106,7 @@ export default function App() {
   const [renameFileOnDisk, setRenameFileOnDisk] = useState(true);
   const [isRenaming, setIsRenaming] = useState(false);
 
-  // Upload modal states
+  // Upload modal states (Single & Multi-file Batch Queue)
   const [uploadMethod, setUploadMethod] = useState('file');
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadPreview, setUploadPreview] = useState(null);
@@ -113,6 +114,11 @@ export default function App() {
   const [uploadDriveUrl, setUploadDriveUrl] = useState('');
   const [uploadCategory, setUploadCategory] = useState('Testing Equipment');
   const [uploading, setUploading] = useState(false);
+  const [uploadFilesQueue, setUploadFilesQueue] = useState([]);
+
+  // Multi-select products state (Videos & Photos)
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
 
   // Google Drive Integration States
   const [driveStatus, setDriveStatus] = useState({
@@ -141,6 +147,7 @@ export default function App() {
   const [uploadDriveId, setUploadDriveId] = useState(null);
   const [uploadError, setUploadError] = useState(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [activeDriveUpload, setActiveDriveUpload] = useState(null);
 
   // Check Drive status from backend
   const checkDriveStatus = async () => {
@@ -280,6 +287,31 @@ export default function App() {
         const fallbackRes = await fetch('/videos_data.json');
         loadedVideos = await fallbackRes.json();
       }
+
+      // Merge client uploads from localStorage so newly uploaded videos persist seamlessly across refresh
+      if (typeof window !== 'undefined') {
+        try {
+          const savedUploads = JSON.parse(localStorage.getItem('nunes_uploaded_vids') || '[]');
+          if (Array.isArray(savedUploads) && savedUploads.length > 0) {
+            savedUploads.forEach(uv => {
+              const idx = loadedVideos.findIndex(v => v.id === uv.id || (uv.productName && v.productName === uv.productName) || (uv.driveId && v.driveId === uv.driveId));
+              if (idx >= 0) {
+                loadedVideos[idx] = { ...loadedVideos[idx], ...uv };
+              } else {
+                loadedVideos.unshift(uv);
+              }
+            });
+          }
+
+          // Filter out any videos deleted by the user
+          const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
+          if (Array.isArray(deletedIds) && deletedIds.length > 0) {
+            const deletedSet = new Set(deletedIds);
+            loadedVideos = loadedVideos.filter(v => !deletedSet.has(v.id) && !deletedSet.has(v.driveId));
+          }
+        } catch (e) {}
+      }
+
       setVideos(loadedVideos);
 
       // Fetch photos - ONLY photos added by the user are shown (strict deduplication)
@@ -551,324 +583,468 @@ export default function App() {
     }
   };
 
-  // Upload handler with real-time Google Drive Progress and Resumable Upload
-  const handleUpload = async (e) => {
-    e.preventDefault();
-    if (!uploadFile) {
-      alert('Please select a photo or video file from your device');
-      return;
-    }
-    if (!uploadProductName.trim()) {
-      alert('Please enter a product name');
-      return;
-    }
-
+  // Multi-file selection handler (supports 1 file or 50+ files at once)
+  const handleFilesSelected = (fileList) => {
+    if (!fileList || fileList.length === 0) return;
     const isPhoto = dashboardMode === 'photos';
-    const newId = `${isPhoto ? 'photo' : 'vid'}_${Date.now()}`;
-    const sizeMb = Number((uploadFile.size / (1024 * 1024)).toFixed(2));
-    const title = uploadProductName.trim();
-    const fileToUpload = uploadFile;
-
-    // Validate format
     const validPhotoExts = ['.jpg', '.jpeg', '.png', '.webp'];
     const validVideoExts = ['.mp4', '.mov', '.webm', '.m4v'];
-    const fileExt = fileToUpload.name.substring(fileToUpload.name.lastIndexOf('.')).toLowerCase();
+    const allowedExts = isPhoto ? validPhotoExts : validVideoExts;
 
-    if (isPhoto && !validPhotoExts.includes(fileExt)) {
-      alert(`Invalid photo format (${fileExt}). Please select JPG, PNG, or WEBP.`);
+    const newQueueItems = [];
+    Array.from(fileList).forEach((file, idx) => {
+      const dotIdx = file.name.lastIndexOf('.');
+      const fileExt = dotIdx >= 0 ? file.name.substring(dotIdx).toLowerCase() : '';
+      if (!allowedExts.includes(fileExt)) return;
+
+      const cleanName = file.name
+        .replace(/\.[^/.]+$/, '')
+        .replace(/\s*-\s*Copy(\s*\(\d+\))?$/i, '')
+        .trim();
+
+      const previewUrl = URL.createObjectURL(file);
+      const sizeMb = Number((file.size / (1024 * 1024)).toFixed(2));
+
+      newQueueItems.push({
+        uid: `q_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+        file,
+        productName: cleanName || file.name,
+        category: uploadCategory,
+        sizeMb,
+        ext: fileExt,
+        previewUrl,
+        selected: true
+      });
+    });
+
+    if (newQueueItems.length === 0) {
+      alert(`Please select valid ${isPhoto ? 'Photo (JPG, PNG, WEBP)' : 'Video (MP4, MOV, WEBM, M4V)'} files.`);
       return;
     }
-    if (!isPhoto && !validVideoExts.includes(fileExt)) {
-      alert(`Invalid video format (${fileExt}). Please select MP4, MOV, WEBM, or M4V.`);
+
+    setUploadFilesQueue(prev => {
+      const existingNames = new Set(prev.map(item => item.file.name.toLowerCase()));
+      const uniqueNew = newQueueItems.filter(item => !existingNames.has(item.file.name.toLowerCase()));
+      const combined = [...prev, ...uniqueNew];
+      if (combined.length > 0) {
+        setUploadFile(combined[0].file);
+        setUploadPreview(combined[0].previewUrl);
+        if (combined.length === 1) {
+          setUploadProductName(combined[0].productName);
+        }
+      }
+      return combined;
+    });
+  };
+
+  // Multi-select dashboard helpers (Videos & Photos)
+  const toggleSelectItem = (id, e) => {
+    if (e) e.stopPropagation();
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const handleSelectAllVisible = () => {
+    const visibleList = dashboardMode === 'videos' ? filteredVideos : filteredPhotos;
+    const visibleIds = visibleList.map(item => item.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.includes(id));
+    if (allSelected) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(visibleIds);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    const isPhoto = dashboardMode === 'photos';
+    const currentList = isPhoto ? photos : videos;
+    const itemsToDelete = currentList.filter(item => selectedIds.includes(item.id));
+    if (itemsToDelete.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete ${itemsToDelete.length} selected ${isPhoto ? 'photo(s)' : 'video(s)'}?\n\n✓ They will also be permanently deleted from your Google Drive.`
+    );
+    if (!confirmed) return;
+
+    const idsSet = new Set(selectedIds);
+    const driveIdsToDelete = itemsToDelete
+      .map(item => item.driveId || (item.driveUrl ? item.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1] : null))
+      .filter(id => id && id !== 'syncing');
+
+    if (!isPhoto) {
+      setVideos(prev => prev.filter(v => !idsSet.has(v.id)));
+      if (selectedVideo && idsSet.has(selectedVideo.id)) setSelectedVideo(null);
+      try {
+        const savedUploads = JSON.parse(localStorage.getItem('nunes_uploaded_vids') || '[]');
+        const updatedUploads = savedUploads.filter(u => !idsSet.has(u.id) && !driveIdsToDelete.includes(u.driveId));
+        localStorage.setItem('nunes_uploaded_vids', JSON.stringify(updatedUploads));
+
+        const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
+        deletedIds.push(...selectedIds, ...driveIdsToDelete);
+        localStorage.setItem('nunes_deleted_ids', JSON.stringify(deletedIds));
+      } catch (e) {}
+    } else {
+      setPhotos(prev => {
+        const updated = prev.filter(p => !idsSet.has(p.id));
+        try {
+          localStorage.setItem('nunes_user_photos', JSON.stringify(updated));
+        } catch (e) {}
+        return updated;
+      });
+      if (selectedPhoto && idsSet.has(selectedPhoto.id)) setSelectedPhoto(null);
+    }
+
+    setSelectedIds([]);
+    setIsSelectMode(false);
+
+    for (const dId of driveIdsToDelete) {
+      try {
+        await fetch('/api/drive/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileId: dId })
+        });
+      } catch (err) {
+        console.warn('Bulk Drive delete note:', err);
+      }
+    }
+  };
+
+  // Upload handler supporting Single OR Multi-file Batch Upload to Google Drive (Videos & Photos)
+  const handleUpload = async (e) => {
+    e.preventDefault();
+    const isPhoto = dashboardMode === 'photos';
+
+    // Build active batch from queue or single file fallback
+    let activeBatch = uploadFilesQueue.filter(item => item.selected);
+    if (activeBatch.length === 0 && uploadFile) {
+      const dotIdx = uploadFile.name.lastIndexOf('.');
+      const ext = dotIdx >= 0 ? uploadFile.name.substring(dotIdx).toLowerCase() : (isPhoto ? '.jpg' : '.mp4');
+      activeBatch = [{
+        uid: `q_${Date.now()}_0`,
+        file: uploadFile,
+        productName: uploadProductName.trim() || uploadFile.name.replace(/\.[^/.]+$/, ''),
+        category: uploadCategory,
+        sizeMb: Number((uploadFile.size / (1024 * 1024)).toFixed(2)),
+        ext,
+        previewUrl: uploadPreview || URL.createObjectURL(uploadFile),
+        selected: true
+      }];
+    } else if (activeBatch.length === 1 && uploadProductName.trim()) {
+      activeBatch[0] = { ...activeBatch[0], productName: uploadProductName.trim() };
+    }
+
+    if (activeBatch.length === 0) {
+      alert(`Please select at least one ${isPhoto ? 'photo' : 'video'} file to upload.`);
       return;
     }
 
     setUploading(true);
-    setUploadProgress(15);
-    setUploadStatusText('Connecting to Google Drive...');
+    setUploadProgress(100);
+    setUploadSuccess(true);
     setUploadError(null);
-    setUploadSuccess(false);
-    setUploadDriveId(null);
+    setUploadStatusText(`✓ Added ${activeBatch.length} ${isPhoto ? 'photo(s)' : 'video(s)'}! Syncing to Google Drive...`);
 
-    // Read local preview
-    let dataUrl = uploadPreview;
-    if (!dataUrl) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        dataUrl = event.target.result;
+    const baseTimestamp = Date.now();
+    const batchRecords = activeBatch.map((item, idx) => {
+      const newId = `${isPhoto ? 'photo' : 'vid'}_${baseTimestamp}_${idx}`;
+      const title = (item.productName || item.file.name.replace(/\.[^/.]+$/, '')).trim();
+      return {
+        ...item,
+        newId,
+        title
       };
-      reader.readAsDataURL(fileToUpload);
+    });
+
+    // 1. INSTANT OPTIMISTIC UI (< 0.3s): Add all selected items to Dashboard immediately
+    if (!isPhoto) {
+      const immediateVideos = batchRecords.map(rec => ({
+        id: rec.newId,
+        originalFilename: rec.file.name,
+        currentFilename: `${rec.title}${rec.ext}`,
+        productName: rec.title,
+        isRenamed: true,
+        thumbnailUrl: '/thumbnails/vid_001.jpg',
+        filePath: '',
+        sizeMb: rec.sizeMb,
+        durationSec: 0,
+        driveId: 'syncing',
+        driveUrl: '',
+        blobUrl: rec.previewUrl,
+        isSyncedToDrive: false,
+        category: rec.category || uploadCategory,
+        createdAt: new Date().toISOString()
+      }));
+
+      const newTitles = new Set(immediateVideos.map(v => v.productName.toLowerCase()));
+      setVideos(prev => [...immediateVideos, ...prev.filter(v => !newTitles.has((v.productName || '').toLowerCase()))]);
+    } else {
+      const immediatePhotos = batchRecords.map(rec => ({
+        id: rec.newId,
+        originalFilename: rec.file.name,
+        currentFilename: `${rec.title}${rec.ext}`,
+        productName: rec.title,
+        isRenamed: true,
+        imageUrl: rec.previewUrl,
+        thumbnailUrl: rec.previewUrl,
+        sizeMb: rec.sizeMb,
+        driveId: 'syncing',
+        driveUrl: GOOGLE_DRIVE_PHOTOS_URL,
+        isSyncedToDrive: false,
+        category: rec.category || uploadCategory,
+        createdAt: new Date().toISOString(),
+        isUserUploaded: true
+      }));
+
+      const newTitles = new Set(immediatePhotos.map(p => p.productName.toLowerCase()));
+      setPhotos(prev => {
+        const updated = [...immediatePhotos, ...prev.filter(p => !newTitles.has((p.productName || '').toLowerCase()))];
+        try {
+          localStorage.setItem('nunes_user_photos', JSON.stringify(updated));
+        } catch (err) {}
+        return updated;
+      });
     }
 
-    // 1. Video Upload via Google Drive Resumable Upload protocol
-    if (!isPhoto) {
-      try {
-        setUploadStatusText('Initiating Google Drive resumable session...');
-        setUploadProgress(25);
+    // Dismiss modal within 0.3s so user never waits!
+    setTimeout(() => {
+      setUploadModalOpen(false);
+      setUploading(false);
+      setUploadFile(null);
+      setUploadPreview(null);
+      setUploadProductName('');
+      setUploadFilesQueue([]);
+    }, 250);
 
-        const initEndpoint = isLocalHost ? '/api/drive/initiate-video-upload' : `${streamServerUrl}/api/drive/initiate-video-upload`;
-        let resumableSession = null;
+    // 2. BACKGROUND GOOGLE DRIVE UPLOAD QUEUE (Sequential / Fast Direct Stream)
+    (async () => {
+      const totalFiles = batchRecords.length;
+      for (let i = 0; i < totalFiles; i++) {
+        const rec = batchRecords[i];
+        const fileToUpload = rec.file;
+        const labelPrefix = totalFiles > 1 ? `(${i + 1}/${totalFiles}) ` : '';
+        const displayTitle = `${labelPrefix}${rec.title}`;
+
+        setActiveDriveUpload({
+          id: rec.newId,
+          title: displayTitle,
+          progress: 5,
+          status: 'uploading'
+        });
+
+        // For photos, also read DataURL in background so localStorage has persistent offline base64
+        let photoDataUrl = null;
+        if (isPhoto && fileToUpload.size < 4 * 1024 * 1024) {
+          try {
+            photoDataUrl = await new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onload = (ev) => resolve(ev.target.result);
+              reader.onerror = () => resolve(null);
+              reader.readAsDataURL(fileToUpload);
+            });
+          } catch (e) {}
+        }
+
         try {
-          const initRes = await fetch(initEndpoint, {
+          let resumableSession = null;
+          const initRes = await fetch('/api/drive/initiate-video-upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              fileName: `${title}${fileExt}`,
-              mimeType: fileToUpload.type || 'video/mp4',
+              fileName: `${rec.title}${rec.ext}`,
+              mimeType: fileToUpload.type || (isPhoto ? 'image/jpeg' : 'video/mp4'),
               fileSize: fileToUpload.size,
-              folderType: 'videos'
+              folderType: isPhoto ? 'photos' : 'videos'
             })
           });
+
           if (initRes.ok) {
             resumableSession = await initRes.json();
+          } else {
+            const errJson = await initRes.json().catch(() => ({}));
+            setActiveDriveUpload({
+              id: rec.newId,
+              title: displayTitle,
+              status: 'error',
+              error: errJson.error || 'Drive initiation failed'
+            });
+            continue;
           }
-        } catch (initErr) {
-          console.warn('Resumable init note:', initErr);
-        }
 
-        // If direct resumable URL obtained from Google Drive
-        if (resumableSession && resumableSession.uploadUrl) {
-          setUploadStatusText('Uploading video directly to Google Drive...');
-          const xhr = new XMLHttpRequest();
-          xhr.open('PUT', resumableSession.uploadUrl, true);
-          xhr.setRequestHeader('Content-Type', fileToUpload.type || 'video/mp4');
+          if (resumableSession && resumableSession.uploadUrl) {
+            await new Promise((resolve) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open('PUT', resumableSession.uploadUrl, true);
+              xhr.setRequestHeader('Content-Type', fileToUpload.type || (isPhoto ? 'image/jpeg' : 'video/mp4'));
 
-          xhr.upload.onprogress = (ev) => {
-            if (ev.lengthComputable) {
-              const pct = Math.min(95, Math.round(25 + (ev.loaded / ev.total) * 70));
-              setUploadProgress(pct);
-              setUploadStatusText(`Uploading to Google Drive: ${Math.round((ev.loaded / (1024 * 1024)) * 10) / 10} MB of ${sizeMb} MB (${Math.round((ev.loaded / ev.total) * 100)}%)...`);
-            }
-          };
-
-          xhr.onload = async () => {
-            if (xhr.status === 200 || xhr.status === 201) {
-              const driveData = JSON.parse(xhr.responseText);
-              setUploadProgress(100);
-              setUploadDriveId(driveData.id);
-              setUploadSuccess(true);
-              setUploadStatusText('✓ Saved directly to Google Drive Videos Folder!');
-
-              // Complete registration in catalog
-              const compEndpoint = isLocalHost ? '/api/drive/complete-video-upload' : `${streamServerUrl}/api/drive/complete-video-upload`;
-              try {
-                await fetch(compEndpoint, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    driveFileId: driveData.id,
-                    driveUrl: driveData.webViewLink,
-                    productName: title,
-                    originalFilename: fileToUpload.name,
-                    sizeMb: sizeMb,
-                    category: uploadCategory
-                  })
-                });
-              } catch (e) {}
-
-              const newVid = {
-                id: newId,
-                originalFilename: fileToUpload.name,
-                currentFilename: `${title}${fileExt}`,
-                productName: title,
-                isRenamed: true,
-                thumbnailUrl: '/thumbnails/vid_001.jpg',
-                filePath: '',
-                sizeMb: sizeMb,
-                durationSec: 0,
-                driveId: driveData.id,
-                driveUrl: driveData.webViewLink || `https://drive.google.com/file/d/${driveData.id}/view`,
-                isSyncedToDrive: true,
-                category: uploadCategory,
-                createdAt: new Date().toISOString()
+              xhr.upload.onprogress = (ev) => {
+                if (ev.lengthComputable) {
+                  const pct = Math.min(99, Math.round((ev.loaded / ev.total) * 100));
+                  setActiveDriveUpload(prev => (prev && prev.id === rec.newId ? { ...prev, progress: pct } : prev));
+                }
               };
-              setVideos(prev => [newVid, ...prev]);
 
-              setTimeout(() => {
-                setUploadModalOpen(false);
-                setUploading(false);
-                setUploadFile(null);
-                setUploadPreview(null);
-                setUploadProductName('');
-              }, 2000);
-            } else {
-              throw new Error(`Upload returned status ${xhr.status}`);
-            }
-          };
+              xhr.onload = async () => {
+                if (xhr.status === 200 || xhr.status === 201) {
+                  let driveData = {};
+                  try { driveData = JSON.parse(xhr.responseText); } catch (e) {}
+                  const fileId = driveData.id || resumableSession.uploadUrl.match(/upload_id=([^&]+)/)?.[1] || '';
 
-          xhr.onerror = () => {
-            throw new Error('Network error during Google Drive resumable upload');
-          };
+                  if (fileId) {
+                    const driveUrl = driveData.webViewLink || `https://drive.google.com/file/d/${fileId}/view?usp=drivesdk`;
 
-          xhr.send(fileToUpload);
-          return;
-        }
+                    // Make file public on Google Drive (Anyone with link can view/stream)
+                    try {
+                      await fetch('/api/drive/make-public', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ fileId })
+                      });
+                    } catch (pErr) {}
 
-        // Fallback: Standard multipart upload to server
-        setUploadStatusText('Uploading video to sync server...');
-        const formData = new FormData();
-        formData.append('video', fileToUpload);
-        formData.append('productName', title);
-        formData.append('category', uploadCategory);
+                    if (!isPhoto) {
+                      const updatedVid = {
+                        id: rec.newId,
+                        originalFilename: fileToUpload.name,
+                        currentFilename: `${rec.title}${rec.ext}`,
+                        productName: rec.title,
+                        isRenamed: true,
+                        thumbnailUrl: driveData.thumbnailLink || '/thumbnails/vid_001.jpg',
+                        filePath: '',
+                        sizeMb: rec.sizeMb,
+                        durationSec: 0,
+                        driveId: fileId,
+                        driveUrl,
+                        isSyncedToDrive: true,
+                        category: rec.category || uploadCategory,
+                        createdAt: new Date().toISOString()
+                      };
 
-        const xhrFallback = new XMLHttpRequest();
-        const fallbackEndpoint = isLocalHost ? '/api/upload' : `${streamServerUrl}/api/upload`;
-        xhrFallback.open('POST', fallbackEndpoint, true);
+                      setVideos(prev => prev.map(v => v.id === rec.newId ? { ...v, ...updatedVid } : v));
+                      setSelectedVideo(prev => (prev && prev.id === rec.newId ? { ...prev, ...updatedVid } : prev));
 
-        xhrFallback.upload.onprogress = (ev) => {
-          if (ev.lengthComputable) {
-            const pct = Math.min(95, Math.round((ev.loaded / ev.total) * 90));
-            setUploadProgress(pct);
-            setUploadStatusText(`Uploading: ${Math.round((ev.loaded / (1024 * 1024)) * 10) / 10} MB of ${sizeMb} MB...`);
+                      try {
+                        const savedUploads = JSON.parse(localStorage.getItem('nunes_uploaded_vids') || '[]');
+                        const filtered = savedUploads.filter(u => u.id !== rec.newId && u.productName !== rec.title);
+                        filtered.unshift(updatedVid);
+                        localStorage.setItem('nunes_uploaded_vids', JSON.stringify(filtered));
+                      } catch (e) {}
+                    } else {
+                      const driveThumb = `https://drive.google.com/thumbnail?id=${fileId}&sz=w1200`;
+                      const updatedPhoto = {
+                        id: rec.newId,
+                        originalFilename: fileToUpload.name,
+                        currentFilename: `${rec.title}${rec.ext}`,
+                        productName: rec.title,
+                        isRenamed: true,
+                        imageUrl: photoDataUrl || driveThumb,
+                        thumbnailUrl: photoDataUrl || driveThumb,
+                        sizeMb: rec.sizeMb,
+                        driveId: fileId,
+                        driveUrl,
+                        isSyncedToDrive: true,
+                        category: rec.category || uploadCategory,
+                        createdAt: new Date().toISOString(),
+                        isUserUploaded: true
+                      };
+
+                      setPhotos(prev => {
+                        const updated = prev.map(p => p.id === rec.newId ? { ...p, ...updatedPhoto } : p);
+                        try {
+                          localStorage.setItem('nunes_user_photos', JSON.stringify(updated));
+                        } catch (e) {}
+                        return updated;
+                      });
+                    }
+                  }
+                } else {
+                  setActiveDriveUpload({
+                    id: rec.newId,
+                    title: displayTitle,
+                    status: 'error',
+                    error: `Drive upload returned HTTP ${xhr.status}`
+                  });
+                }
+                resolve();
+              };
+
+              xhr.onerror = () => {
+                setActiveDriveUpload({
+                  id: rec.newId,
+                  title: displayTitle,
+                  status: 'error',
+                  error: 'Upload network interrupted'
+                });
+                resolve();
+              };
+
+              xhr.send(fileToUpload);
+            });
           }
-        };
-
-        xhrFallback.onload = () => {
-          setUploadProgress(100);
-          setUploadSuccess(true);
-          setUploadStatusText('✓ Video saved and queued for Google Drive!');
-          setTimeout(() => {
-            setUploadModalOpen(false);
-            setUploading(false);
-            fetchData();
-          }, 1500);
-        };
-        xhrFallback.send(formData);
-
-      } catch (err) {
-        console.error('Video upload error:', err);
-        setUploadError(err.message || 'Video upload failed. Please retry.');
-        setUploading(false);
-      }
-      return;
-    }
-
-    // 2. Photo Upload
-    try {
-      setUploadStatusText('Uploading photo to Google Drive...');
-      const formData = new FormData();
-      formData.append('photo', fileToUpload);
-      formData.append('productName', title);
-      formData.append('category', uploadCategory);
-
-      const xhr = new XMLHttpRequest();
-      const endpoint = isLocalHost ? '/api/upload-photo' : `${streamServerUrl}/api/upload-photo`;
-      xhr.open('POST', endpoint, true);
-
-      xhr.upload.onprogress = (ev) => {
-        if (ev.lengthComputable) {
-          const pct = Math.min(95, Math.round((ev.loaded / ev.total) * 90));
-          setUploadProgress(pct);
-          setUploadStatusText(`Uploading photo: ${pct}%...`);
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          const result = JSON.parse(xhr.responseText);
-          setUploadProgress(100);
-          setUploadSuccess(true);
-          const driveId = result.item?.driveId || 'Synced';
-          setUploadDriveId(driveId);
-          setUploadStatusText('✓ Saved to Google Drive Photos Folder!');
-
-          // Add to local state
-          const instantEntry = {
-            id: newId,
-            originalFilename: fileToUpload.name,
-            currentFilename: fileToUpload.name,
-            productName: title,
-            isRenamed: true,
-            imageUrl: dataUrl || result.item?.imageUrl,
-            thumbnailUrl: dataUrl || result.item?.imageUrl,
-            sizeMb: sizeMb,
-            driveId: driveId,
-            driveUrl: result.item?.driveUrl || GOOGLE_DRIVE_PHOTOS_URL,
-            isSyncedToDrive: true,
-            createdAt: new Date().toISOString(),
-            isUserUploaded: true
-          };
-
-          setPhotos(prev => {
-            const cleanPrev = prev.filter(p => 
-              p.id !== newId && 
-              p.originalFilename?.toLowerCase() !== fileToUpload.name.toLowerCase() &&
-              p.currentFilename?.toLowerCase() !== fileToUpload.name.toLowerCase() &&
-              p.productName?.toLowerCase() !== title.toLowerCase()
-            );
-            const updated = [instantEntry, ...cleanPrev];
-            try {
-              localStorage.setItem('nunes_user_photos', JSON.stringify(updated));
-            } catch (err) {}
-            return updated;
+        } catch (bgErr) {
+          setActiveDriveUpload({
+            id: rec.newId,
+            title: displayTitle,
+            status: 'error',
+            error: bgErr.message
           });
-
-          setTimeout(() => {
-            setUploadModalOpen(false);
-            setUploading(false);
-            setUploadFile(null);
-            setUploadPreview(null);
-            setUploadProductName('');
-          }, 1800);
-        } else {
-          setUploadError(`Upload failed with status ${xhr.status}`);
-          setUploading(false);
         }
-      };
+      }
 
-      xhr.onerror = () => {
-        // Optimistic offline save so photo is not lost
-        const instantEntry = {
-          id: newId,
-          originalFilename: fileToUpload.name,
-          currentFilename: fileToUpload.name,
-          productName: title,
-          isRenamed: true,
-          imageUrl: dataUrl,
-          thumbnailUrl: dataUrl,
-          sizeMb: sizeMb,
-          createdAt: new Date().toISOString(),
-          isUserUploaded: true
-        };
-        setPhotos(prev => [instantEntry, ...prev]);
-        setUploadProgress(100);
-        setUploadSuccess(true);
-        setUploadStatusText('✓ Saved to Dashboard (Local offline copy)');
-        setTimeout(() => {
-          setUploadModalOpen(false);
-          setUploading(false);
-        }, 1500);
-      };
-
-      xhr.send(formData);
-
-    } catch (err) {
-      console.error('Photo upload error:', err);
-      setUploadError(err.message || 'Photo upload encountered an issue');
-      setUploading(false);
-    }
+      // All batch items completed!
+      setActiveDriveUpload({
+        id: 'batch_done',
+        title: totalFiles > 1 ? `All ${totalFiles} ${isPhoto ? 'Photos' : 'Videos'} Uploaded!` : batchRecords[0].title,
+        progress: 100,
+        status: 'completed'
+      });
+      setTimeout(() => {
+        setActiveDriveUpload(prev => (prev && prev.id === 'batch_done' ? null : prev));
+      }, 5000);
+    })();
   };
 
 
-  // Delete product handler
+  // Delete product handler (deletes from Google Drive + Dashboard)
   const handleDeleteItem = async (item, type, e) => {
     if (e) e.stopPropagation();
-    const confirmed = window.confirm(`Are you sure you want to delete "${item.productName || item.originalFilename}"?`);
+    const driveIdToDelete = item.driveId || (item.driveUrl ? item.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1] : null);
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${item.productName || item.originalFilename}"?${
+        driveIdToDelete && driveIdToDelete !== 'syncing' ? '\n\n✓ This file will also be permanently deleted from your Google Drive.' : ''
+      }`
+    );
     if (!confirmed) return;
 
-    try {
-      const endpoint = isLocalHost 
-        ? (type === 'video' ? `/api/video/${item.id}` : `/api/photo/${item.id}`)
-        : `${streamServerUrl}${type === 'video' ? `/api/video/${item.id}` : `/api/photo/${item.id}`}`;
-
-      await fetch(endpoint, { method: 'DELETE' });
-    } catch (err) {
-      console.warn('Delete warning:', err);
+    // 1. Delete from Google Drive 24/7 Cloud
+    if (driveIdToDelete && driveIdToDelete !== 'syncing') {
+      try {
+        await fetch('/api/drive/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileId: driveIdToDelete })
+        });
+      } catch (driveErr) {
+        console.warn('Google Drive delete note:', driveErr);
+      }
     }
 
+    // 2. Remove from active state and persistent storage
     if (type === 'video') {
       setVideos(prev => prev.filter(v => v.id !== item.id));
       if (selectedVideo && selectedVideo.id === item.id) setSelectedVideo(null);
+
+      try {
+        const savedUploads = JSON.parse(localStorage.getItem('nunes_uploaded_vids') || '[]');
+        const updatedUploads = savedUploads.filter(u => u.id !== item.id && u.productName !== item.productName && u.driveId !== driveIdToDelete);
+        localStorage.setItem('nunes_uploaded_vids', JSON.stringify(updatedUploads));
+
+        // Persist deleted IDs so items stay deleted across reloads
+        const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
+        deletedIds.push(item.id);
+        if (driveIdToDelete) deletedIds.push(driveIdToDelete);
+        localStorage.setItem('nunes_deleted_ids', JSON.stringify(deletedIds));
+      } catch (err) {}
     } else {
       setPhotos(prev => {
         const updated = prev.filter(p => p.id !== item.id);
@@ -1017,11 +1193,19 @@ export default function App() {
             </a>
 
             <button
-              onClick={() => setUploadModalOpen(true)}
+              onClick={() => {
+                setUploadFilesQueue([]);
+                setUploadFile(null);
+                setUploadPreview(null);
+                setUploadProductName('');
+                setUploadError(null);
+                setUploadSuccess(false);
+                setUploadModalOpen(true);
+              }}
               className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-600/25 transition transform active:scale-95"
             >
               <Upload className="w-3.5 h-3.5" />
-              <span>{dashboardMode === 'videos' ? 'Add Video' : 'Add Photo'}</span>
+              <span>{dashboardMode === 'videos' ? 'Add Videos' : 'Add Photos'}</span>
             </button>
           </div>
 
@@ -1083,8 +1267,51 @@ export default function App() {
             )}
           </div>
 
-          {/* Sort Selector */}
+          {/* Multi-Select & Sort Selector */}
           <div className="flex items-center flex-wrap gap-2.5 text-xs text-slate-600 font-medium">
+            {/* Multi-Select Toggle & Bulk Actions */}
+            <button
+              type="button"
+              onClick={() => {
+                if (isSelectMode) {
+                  setIsSelectMode(false);
+                  setSelectedIds([]);
+                } else {
+                  setIsSelectMode(true);
+                }
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition shadow-xs ${
+                isSelectMode || selectedIds.length > 0
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+              }`}
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>{isSelectMode || selectedIds.length > 0 ? `Selected (${selectedIds.length})` : 'Select Multiple'}</span>
+            </button>
+
+            {(isSelectMode || selectedIds.length > 0) && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleSelectAllVisible}
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition"
+                >
+                  Select All
+                </button>
+                {selectedIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleBulkDelete}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-red-600 text-white hover:bg-red-700 shadow-sm transition"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete ({selectedIds.length})</span>
+                  </button>
+                )}
+              </>
+            )}
+
             <div className="flex items-center gap-1.5 text-xs text-slate-600 font-semibold">
               <ArrowUpDown className="w-3.5 h-3.5 text-blue-600" />
               <span>Sort:</span>
@@ -1129,11 +1356,23 @@ export default function App() {
           ) : (
             /* PRODUCT VIDEO BOX GRID */
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5 sm:gap-4.5">
-            {filteredVideos.map((video) => (
+            {filteredVideos.map((video) => {
+              const isSelected = selectedIds.includes(video.id);
+              return (
               <div
                 key={video.id}
-                onClick={() => handlePlayVideo(video)}
-                className="group relative bg-white hover:bg-slate-50/50 rounded-2xl border border-slate-200 hover:border-blue-400 hover:shadow-xl transition-all duration-200 overflow-hidden flex flex-col cursor-pointer transform hover:-translate-y-1 shadow-sm"
+                onClick={(e) => {
+                  if (isSelectMode) {
+                    toggleSelectItem(video.id, e);
+                  } else {
+                    handlePlayVideo(video);
+                  }
+                }}
+                className={`group relative bg-white hover:bg-slate-50/50 rounded-2xl border transition-all duration-200 overflow-hidden flex flex-col cursor-pointer transform hover:-translate-y-1 shadow-sm ${
+                  isSelected
+                    ? 'border-blue-600 ring-2 ring-blue-500/40 bg-blue-50/20'
+                    : 'border-slate-200 hover:border-blue-400 hover:shadow-xl'
+                }`}
               >
                 {/* Video Profile Thumbnail Poster Image */}
                 <div className="relative aspect-video w-full bg-slate-900 overflow-hidden">
@@ -1172,16 +1411,34 @@ export default function App() {
                     </span>
                   )}
 
-                  {/* Status & Cloud Badges */}
-                  <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 flex-wrap">
+                  {/* Multi-Select Checkbox + Status & Cloud Badges */}
+                  <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 flex-wrap z-10">
+                    <button
+                      type="button"
+                      onClick={(e) => toggleSelectItem(video.id, e)}
+                      title={isSelected ? 'Deselect product' : 'Select product'}
+                      className={`w-6 h-6 rounded-lg flex items-center justify-center border shadow-md transition-all ${
+                        isSelected
+                          ? 'bg-blue-600 border-blue-600 text-white scale-105'
+                          : isSelectMode
+                            ? 'bg-white/95 border-slate-400 text-transparent hover:border-blue-600'
+                            : 'bg-white/90 border-slate-300 text-transparent opacity-0 group-hover:opacity-100 hover:border-blue-600'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                    </button>
                     <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-500 text-white px-2 py-0.5 rounded-full shadow-sm">
                       <CheckCircle2 className="w-3 h-3" /> Named
                     </span>
-                    {(video.driveId || video.isSyncedToDrive) && (
+                    {video.driveId && video.driveId !== 'syncing' ? (
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-blue-600/95 text-white px-2 py-0.5 rounded-full shadow-sm backdrop-blur-xs">
                         <Cloud className="w-3 h-3" /> 24/7 Cloud
                       </span>
-                    )}
+                    ) : video.driveId === 'syncing' ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-amber-500 text-white px-2 py-0.5 rounded-full shadow-sm animate-pulse">
+                        <RefreshCw className="w-3 h-3 animate-spin" /> Uploading to Drive...
+                      </span>
+                    ) : null}
                   </div>
 
                   {/* File Size Badge */}
@@ -1238,7 +1495,8 @@ export default function App() {
                 </div>
 
               </div>
-            ))}
+              );
+            })}
           </div>
           )
         ) : (
@@ -1258,11 +1516,24 @@ export default function App() {
           ) : (
             /* PRODUCT PHOTO BOX GRID */
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5 sm:gap-4.5">
-              {filteredPhotos.map((photo) => (
+              {filteredPhotos.map((photo) => {
+                const isSelected = selectedIds.includes(photo.id);
+                return (
                 <div
                   key={photo.id}
-                  onClick={() => { setSelectedPhoto(photo); setPhotoZoom(1); }}
-                  className="group relative bg-white hover:bg-slate-50/50 rounded-2xl border border-slate-200 hover:border-purple-400 hover:shadow-xl transition-all duration-200 overflow-hidden flex flex-col cursor-pointer transform hover:-translate-y-1 shadow-sm"
+                  onClick={(e) => {
+                    if (isSelectMode) {
+                      toggleSelectItem(photo.id, e);
+                    } else {
+                      setSelectedPhoto(photo);
+                      setPhotoZoom(1);
+                    }
+                  }}
+                  className={`group relative bg-white hover:bg-slate-50/50 rounded-2xl border transition-all duration-200 overflow-hidden flex flex-col cursor-pointer transform hover:-translate-y-1 shadow-sm ${
+                    isSelected
+                      ? 'border-purple-600 ring-2 ring-purple-500/40 bg-purple-50/20'
+                      : 'border-slate-200 hover:border-purple-400 hover:shadow-xl'
+                  }`}
                 >
                   {/* Photo Display Frame */}
                   <div className="relative aspect-video w-full bg-slate-100 overflow-hidden flex items-center justify-center">
@@ -1304,11 +1575,34 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Status Badge */}
-                    <div className="absolute top-2.5 left-2.5">
+                    {/* Multi-Select Checkbox + Status Badge */}
+                    <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 flex-wrap z-10">
+                      <button
+                        type="button"
+                        onClick={(e) => toggleSelectItem(photo.id, e)}
+                        title={isSelected ? 'Deselect photo' : 'Select photo'}
+                        className={`w-6 h-6 rounded-lg flex items-center justify-center border shadow-md transition-all ${
+                          isSelected
+                            ? 'bg-purple-600 border-purple-600 text-white scale-105'
+                            : isSelectMode
+                              ? 'bg-white/95 border-slate-400 text-transparent hover:border-purple-600'
+                              : 'bg-white/90 border-slate-300 text-transparent opacity-0 group-hover:opacity-100 hover:border-purple-600'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                      </button>
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-500 text-white px-2 py-0.5 rounded-full shadow-sm">
                         <CheckCircle2 className="w-3 h-3" /> Named
                       </span>
+                      {photo.driveId && photo.driveId !== 'syncing' ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-purple-600/95 text-white px-2 py-0.5 rounded-full shadow-sm backdrop-blur-xs">
+                          <Cloud className="w-3 h-3" /> 24/7 Cloud
+                        </span>
+                      ) : photo.driveId === 'syncing' ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-amber-500 text-white px-2 py-0.5 rounded-full shadow-sm animate-pulse">
+                          <RefreshCw className="w-3 h-3 animate-spin" /> Uploading...
+                        </span>
+                      ) : null}
                     </div>
 
                     {/* Resolution / Dimensions Badge */}
@@ -1372,7 +1666,8 @@ export default function App() {
                   </div>
 
                 </div>
-              ))}
+                );
+              })}
             </div>
           )
         )}
@@ -1513,15 +1808,26 @@ export default function App() {
                 style={{ backgroundImage: `url(${selectedVideo.thumbnailUrl || selectedVideo.driveThumbnail})` }}
               />
 
-              {/* 1. Google Drive Cloud Player (Plays 24/7 without needing local machine or tunnel) */}
-              {videoSourceMode === 'drive' && (selectedVideo.driveId || selectedVideo.driveUrl) ? (
+              {/* 1. Google Drive Cloud Player (Plays 24/7 once verified Drive file ID exists) */}
+              {videoSourceMode === 'drive' && (selectedVideo.driveId && selectedVideo.driveId !== 'syncing' || selectedVideo.driveUrl) ? (
                 <iframe
                   key={selectedVideo.driveId || selectedVideo.id}
-                  src={`https://drive.google.com/file/d/${selectedVideo.driveId || selectedVideo.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1]}/preview`}
+                  src={`https://drive.google.com/file/d/${selectedVideo.driveId && selectedVideo.driveId !== 'syncing' ? selectedVideo.driveId : selectedVideo.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1]}/preview`}
                   className="relative z-10 w-full h-full border-0 rounded-lg shadow-2xl"
                   allow="autoplay; encrypted-media; fullscreen"
                   allowFullScreen
                   title={selectedVideo.productName}
+                />
+              ) : selectedVideo.blobUrl ? (
+                /* Instant local blob playback */
+                <video
+                  key={selectedVideo.id}
+                  ref={videoRef}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="relative z-10 w-full h-full object-contain"
+                  src={selectedVideo.blobUrl}
                 />
               ) : (
                 /* 2. Native HTML5 Video Player (Streaming from local machine / tunnel) */
@@ -1992,25 +2298,25 @@ export default function App() {
         </div>
       )}
 
-      {/* UPLOAD / ADD NEW MEDIA MODAL */}
+      {/* UPLOAD / ADD NEW MEDIA MODAL (Supports Single & Multiple Product Batch Upload) */}
       {uploadModalOpen && (
         <div 
           onClick={(e) => { if (e.target === e.currentTarget) setUploadModalOpen(false); }}
           className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
         >
-          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg p-6 sm:p-7 shadow-2xl">
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-2xl p-6 sm:p-7 shadow-2xl max-h-[92vh] flex flex-col">
             {/* Modal Header */}
-            <div className="flex items-center justify-between pb-4 border-b border-slate-200">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-200 flex-shrink-0">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-200">
                   <FolderUp className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="font-extrabold text-slate-900 text-base">
-                    Add Product {dashboardMode === 'photos' ? 'Photo' : 'Video'}
+                    Add Product {dashboardMode === 'photos' ? 'Photos' : 'Videos'} (Single or Multiple)
                   </h3>
                   <p className="text-xs text-slate-500 font-medium">
-                    Upload directly from your device to the catalog
+                    Select 1 or many {dashboardMode === 'photos' ? 'photos' : 'videos'} at once — each file name automatically becomes its Product Name
                   </p>
                 </div>
               </div>
@@ -2022,78 +2328,189 @@ export default function App() {
               </button>
             </div>
 
-            <form onSubmit={handleUpload} className="mt-4 space-y-4">
+            <form onSubmit={handleUpload} className="mt-4 space-y-4 overflow-y-auto pr-1 flex-1">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Select {dashboardMode === 'photos' ? 'Photo' : 'Video'} File:
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700">
+                    Select {dashboardMode === 'photos' ? 'Photo' : 'Video'} File(s) — Hold Ctrl / Shift to select multiple:
+                  </label>
+                  {uploadFilesQueue.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUploadFilesQueue([]);
+                        setUploadFile(null);
+                        setUploadProductName('');
+                        setUploadPreview(null);
+                      }}
+                      className="text-[11px] font-bold text-red-600 hover:text-red-700 underline"
+                    >
+                      Clear Queue ({uploadFilesQueue.length})
+                    </button>
+                  )}
+                </div>
                 <input
                   type="file"
+                  multiple
                   accept={dashboardMode === 'photos' ? "image/*" : "video/*"}
-                  onChange={(e) => {
-                    const file = e.target.files[0];
-                    if (file) {
-                      setUploadFile(file);
-                      if (dashboardMode === 'photos') {
-                        setUploadPreview(URL.createObjectURL(file));
-                      }
-                      if (!uploadProductName) {
-                        setUploadProductName(file.name.replace(/\.[^/.]+$/, ""));
-                      }
-                    }
-                  }}
+                  onChange={(e) => handleFilesSelected(e.target.files)}
                   className="w-full text-xs text-slate-600 file:mr-3 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 bg-slate-50 rounded-xl border border-slate-300 p-2 cursor-pointer"
-                  required
+                  required={uploadFilesQueue.length === 0 && !uploadFile}
                 />
-                {uploadPreview && dashboardMode === 'photos' && (
-                  <div className="mt-2.5 flex items-center gap-3 p-2 bg-slate-50 border border-slate-200 rounded-2xl">
-                    <img src={uploadPreview} alt="Selected preview" className="w-14 h-14 object-cover rounded-xl border border-slate-200 shadow-xs" />
-                    <div className="overflow-hidden">
-                      <p className="text-xs font-bold text-slate-800 truncate">{uploadFile?.name}</p>
-                      <p className="text-[10px] text-emerald-600 font-semibold">✓ Image selected & ready</p>
+              </div>
+
+              {/* MULTI-FILE / BATCH QUEUE LIST */}
+              {uploadFilesQueue.length > 1 ? (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between bg-slate-100 px-3.5 py-2 rounded-xl border border-slate-200">
+                    <span className="text-xs font-extrabold text-slate-800">
+                      Selected Batch: {uploadFilesQueue.filter(i => i.selected).length} of {uploadFilesQueue.length} {dashboardMode === 'photos' ? 'Photos' : 'Videos'} Ready
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const allSel = uploadFilesQueue.every(i => i.selected);
+                          setUploadFilesQueue(prev => prev.map(i => ({ ...i, selected: !allSel })));
+                        }}
+                        className="text-[11px] font-bold text-blue-600 hover:text-blue-800 px-2 py-0.5 rounded bg-white border border-blue-200 shadow-2xs"
+                      >
+                        {uploadFilesQueue.every(i => i.selected) ? 'Deselect All' : 'Select All'}
+                      </button>
                     </div>
                   </div>
-                )}
-              </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Product Name:
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. AE Handheld Multi-Gas & Oxygen Detector"
-                  value={uploadProductName}
-                  onChange={(e) => setUploadProductName(e.target.value)}
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 font-medium"
-                  required
-                />
-              </div>
+                  <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                    {uploadFilesQueue.map((item, idx) => (
+                      <div
+                        key={item.id}
+                        className={`flex items-center gap-2.5 p-2.5 rounded-2xl border transition ${
+                          item.selected
+                            ? 'bg-blue-50/40 border-blue-300'
+                            : 'bg-slate-50 border-slate-200 opacity-60'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={item.selected}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setUploadFilesQueue(prev =>
+                              prev.map(q => q.id === item.id ? { ...q, selected: checked } : q)
+                            );
+                          }}
+                          className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer flex-shrink-0"
+                        />
 
-              {/* Nunes Catalog Suggestions Quick Pick */}
-              {catalog.length > 0 && (
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1 flex items-center gap-1">
-                    <Sparkles className="w-3 h-3 text-blue-600" />
-                    Quick Pick from Nunes Catalog:
-                  </label>
-                  <div className="max-h-28 overflow-y-auto space-y-1 p-2 bg-slate-50 rounded-xl border border-slate-200 text-xs">
-                    {catalog
-                      .filter(c => !uploadProductName || c.fullName.toLowerCase().includes(uploadProductName.toLowerCase()))
-                      .slice(0, 5)
-                      .map((c, idx) => (
+                        {item.previewUrl ? (
+                          <img
+                            src={item.previewUrl}
+                            alt={item.productName}
+                            className="w-11 h-11 object-cover rounded-xl border border-slate-200 flex-shrink-0"
+                          />
+                        ) : (
+                          <div className="w-11 h-11 rounded-xl bg-slate-900 text-white flex items-center justify-center flex-shrink-0 text-[10px] font-bold">
+                            #{idx + 1}
+                          </div>
+                        )}
+
+                        <div className="flex-1 min-w-0">
+                          <input
+                            type="text"
+                            value={item.productName}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setUploadFilesQueue(prev =>
+                                prev.map(q => q.id === item.id ? { ...q, productName: val } : q)
+                              );
+                            }}
+                            placeholder="Product Name"
+                            className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                          />
+                          <div className="flex items-center justify-between mt-1 text-[10px] text-slate-500 font-mono">
+                            <span className="truncate">{item.file.name}</span>
+                            <span className="flex-shrink-0 ml-2 font-semibold">{item.sizeMb} MB</span>
+                          </div>
+                        </div>
+
                         <button
-                          key={idx}
                           type="button"
-                          onClick={() => setUploadProductName(c.fullName)}
-                          className="w-full text-left px-2 py-1 rounded-lg hover:bg-blue-100 hover:text-blue-900 text-slate-700 flex items-center justify-between transition text-[11px]"
+                          onClick={() => {
+                            setUploadFilesQueue(prev => prev.filter(q => q.id !== item.id));
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition flex-shrink-0"
+                          title="Remove from batch"
                         >
-                          <span className="truncate font-medium">{c.fullName}</span>
-                          <span className="text-[10px] text-slate-500">{c.category}</span>
+                          <Trash2 className="w-4 h-4" />
                         </button>
-                      ))}
+                      </div>
+                    ))}
                   </div>
                 </div>
+              ) : (
+                /* SINGLE FILE MODE */
+                <>
+                  {uploadPreview && dashboardMode === 'photos' && (
+                    <div className="mt-2.5 flex items-center gap-3 p-2 bg-slate-50 border border-slate-200 rounded-2xl">
+                      <img src={uploadPreview} alt="Selected preview" className="w-14 h-14 object-cover rounded-xl border border-slate-200 shadow-xs" />
+                      <div className="overflow-hidden">
+                        <p className="text-xs font-bold text-slate-800 truncate">{uploadFile?.name}</p>
+                        <p className="text-[10px] text-emerald-600 font-semibold">✓ Image selected & ready</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Product Name:
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. AE Handheld Multi-Gas & Oxygen Detector"
+                      value={uploadProductName}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setUploadProductName(val);
+                        if (uploadFilesQueue.length === 1) {
+                          setUploadFilesQueue(prev => prev.map((q, i) => i === 0 ? { ...q, productName: val } : q));
+                        }
+                      }}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 font-medium"
+                      required={uploadFilesQueue.length <= 1}
+                    />
+                  </div>
+
+                  {/* Nunes Catalog Suggestions Quick Pick */}
+                  {catalog.length > 0 && (
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-blue-600" />
+                        Quick Pick from Nunes Catalog:
+                      </label>
+                      <div className="max-h-28 overflow-y-auto space-y-1 p-2 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+                        {catalog
+                          .filter(c => !uploadProductName || c.fullName.toLowerCase().includes(uploadProductName.toLowerCase()))
+                          .slice(0, 5)
+                          .map((c, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => {
+                                setUploadProductName(c.fullName);
+                                if (uploadFilesQueue.length === 1) {
+                                  setUploadFilesQueue(prev => prev.map((q, i) => i === 0 ? { ...q, productName: c.fullName } : q));
+                                }
+                              }}
+                              className="w-full text-left px-2 py-1 rounded-lg hover:bg-blue-100 hover:text-blue-900 text-slate-700 flex items-center justify-between transition text-[11px]"
+                            >
+                              <span className="truncate font-medium">{c.fullName}</span>
+                              <span className="text-[10px] text-slate-500">{c.category}</span>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               {/* Real-time Google Drive Progress & Status */}
@@ -2152,7 +2569,12 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  disabled={uploading || !uploadFile || !uploadProductName.trim()}
+                  disabled={
+                    uploading ||
+                    (uploadFilesQueue.length > 1
+                      ? !uploadFilesQueue.some(i => i.selected && i.productName.trim())
+                      : (!uploadFile || !uploadProductName.trim()))
+                  }
                   className="px-5 py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white shadow-md shadow-blue-600/25 flex items-center gap-1.5 transition"
                 >
                   {uploading ? (
@@ -2163,7 +2585,11 @@ export default function App() {
                   ) : (
                     <>
                       <FolderUp className="w-3.5 h-3.5" />
-                      <span>Upload & Save to Google Drive</span>
+                      <span>
+                        {uploadFilesQueue.filter(i => i.selected).length > 1
+                          ? `Upload All (${uploadFilesQueue.filter(i => i.selected).length}) to Google Drive`
+                          : 'Upload & Save to Google Drive'}
+                      </span>
                     </>
                   )}
                 </button>
@@ -2483,6 +2909,45 @@ export default function App() {
       )}
 
 
+
+      {/* Floating Real-time Google Drive Upload Status Toast */}
+      {activeDriveUpload && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900/95 backdrop-blur-md border border-slate-700 text-white p-4 rounded-2xl shadow-2xl flex items-center gap-4 max-w-sm">
+          <div className={`p-3 rounded-xl flex items-center justify-center ${
+            activeDriveUpload.status === 'completed' 
+              ? 'bg-emerald-500/20 text-emerald-400' 
+              : activeDriveUpload.status === 'error' 
+                ? 'bg-red-500/20 text-red-400' 
+                : 'bg-blue-500/20 text-blue-400'
+          }`}>
+            {activeDriveUpload.status === 'completed' ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+            ) : activeDriveUpload.status === 'error' ? (
+              <AlertCircle className="w-5 h-5 text-red-400" />
+            ) : (
+              <RefreshCw className="w-5 h-5 text-blue-400 animate-spin" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-white truncate">{activeDriveUpload.title}</p>
+            <p className="text-[11px] text-slate-300 mt-0.5">
+              {activeDriveUpload.status === 'completed' 
+                ? '✓ Saved to Google Drive 24/7!' 
+                : activeDriveUpload.status === 'error'
+                  ? (activeDriveUpload.error || 'Upload failed')
+                  : `Uploading to Google Drive: ${activeDriveUpload.progress}% (Keep tab open)`}
+            </p>
+            {activeDriveUpload.status === 'uploading' && (
+              <div className="w-full bg-slate-800 rounded-full h-1.5 mt-2 overflow-hidden">
+                <div 
+                  className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+                  style={{ width: `${activeDriveUpload.progress}%` }}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white px-4 py-4 text-center text-xs text-slate-500 font-medium">

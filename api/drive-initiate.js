@@ -19,11 +19,22 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'fileName and fileSize are required' });
     }
 
+    let origin = req.headers.origin || null;
+    if (!origin && req.headers.referer) {
+      try {
+        origin = new URL(req.headers.referer).origin;
+      } catch (e) {}
+    }
+    if (!origin) {
+      origin = 'https://nunes-product-videos.vercel.app';
+    }
+
     const result = await driveService.initiateResumableUpload({
       fileName,
       mimeType,
       fileSize: Number(fileSize),
-      folderType
+      folderType,
+      origin
     });
 
     res.status(200).json({ success: true, ...result });
