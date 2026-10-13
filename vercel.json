@@ -25,6 +25,10 @@
       "destination": "/api/drive-delete"
     },
     {
+      "source": "/api/drive/sync",
+      "destination": "/api/drive-sync"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },

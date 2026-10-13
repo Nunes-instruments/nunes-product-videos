@@ -223,18 +223,17 @@ export default function App() {
     setSyncingDrive(true);
     setSyncFeedback(null);
     try {
-      const endpoint = isLocalHost ? '/api/drive/sync' : `${streamServerUrl}/api/drive/sync`;
-      const res = await fetch(endpoint, { method: 'POST' });
+      const res = await fetch('/api/drive/sync');
       if (res.ok) {
         const data = await res.json();
+        await fetchData();
         setSyncFeedback({
           success: true,
-          message: `Synchronized! Scanned Google Drive folders: ${data.drivePhotosCount || 0} photos, ${data.driveVideosCount || 0} videos. New added: ${data.newPhotosAdded || 0} photos, ${data.newVideosAdded || 0} videos.`
+          message: `Synchronized! Live Google Drive folders: ${(data.photos || []).length} photos, ${(data.videos || []).length} videos synced across all devices.`
         });
-        fetchData();
       } else {
         const err = await res.json();
-        setSyncFeedback({ success: false, message: err.error || 'Sync encounter issue' });
+        setSyncFeedback({ success: false, message: err.error || 'Sync encountered an issue' });
       }
     } catch (e) {
       setSyncFeedback({ success: true, message: 'Google Drive folders are in sync.' });
@@ -269,10 +268,33 @@ export default function App() {
   };
 
 
-  // Fetch initial data
+  // Fetch initial data + Live Cross-Device Google Drive Sync
   const fetchData = async () => {
     try {
       setLoading(true);
+
+      // Load deleted IDs / keys so deleted videos & photos NEVER reappear
+      let deletedSet = new Set();
+      if (typeof window !== 'undefined') {
+        try {
+          const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
+          if (Array.isArray(deletedIds)) {
+            deletedIds.forEach(d => {
+              if (d) deletedSet.add(String(d).toLowerCase());
+            });
+          }
+        } catch (e) {}
+      }
+
+      // Fetch live Google Drive files so additions/deletions on ANY device sync everywhere
+      let liveDriveData = null;
+      try {
+        const driveRes = await fetch('/api/drive/sync');
+        if (driveRes.ok) {
+          liveDriveData = await driveRes.json();
+        }
+      } catch (e) {}
+
       let loadedVideos = [];
       try {
         const endpoint = isLocalHost ? '/api/videos' : `${streamServerUrl}/api/videos`;
@@ -288,12 +310,74 @@ export default function App() {
         loadedVideos = await fallbackRes.json();
       }
 
+      // Merge live Google Drive Videos (Cross-device sync: shows videos uploaded from any phone/PC & hides videos deleted from Drive)
+      if (liveDriveData && Array.isArray(liveDriveData.videos) && liveDriveData.videos.length > 0) {
+        const liveDriveVideoMap = new Map();
+        liveDriveData.videos.forEach(df => liveDriveVideoMap.set(df.id, df));
+
+        // 1. Keep only catalog videos whose driveId still exists in Google Drive (if they had a driveId)
+        loadedVideos = loadedVideos.filter(v => !v.driveId || v.driveId === 'syncing' || liveDriveVideoMap.has(v.driveId));
+
+        // 2. Add any new videos uploaded to Google Drive from other devices
+        const existingDriveIds = new Set(loadedVideos.map(v => v.driveId).filter(Boolean));
+        const existingCleanNames = new Set(
+          loadedVideos.map(v => (v.productName || '').toLowerCase().trim()).filter(Boolean)
+        );
+
+        const newDriveVideos = [];
+        liveDriveData.videos.forEach((df) => {
+          if (existingDriveIds.has(df.id)) return;
+          const cleanTitle = (df.name || '')
+            .replace(/\.[^/.]+$/, '')
+            .replace(/\s*-\s*Copy(\s*\(\d+\))?$/i, '')
+            .replace(/\.+$/, '')
+            .trim();
+          if (!cleanTitle) return;
+          const lowerTitle = cleanTitle.toLowerCase();
+          if (existingCleanNames.has(lowerTitle)) return;
+          existingCleanNames.add(lowerTitle);
+          existingDriveIds.add(df.id);
+
+          newDriveVideos.push({
+            id: `drive_vid_${df.id}`,
+            originalFilename: df.name,
+            currentFilename: df.name,
+            productName: cleanTitle,
+            isRenamed: true,
+            thumbnailUrl: df.thumbnailLink || `https://drive.google.com/thumbnail?id=${df.id}&sz=w800`,
+            driveThumbnail: `https://drive.google.com/thumbnail?id=${df.id}&sz=w800`,
+            filePath: '',
+            sizeMb: df.size ? Number((Number(df.size) / (1024 * 1024)).toFixed(2)) : 5.0,
+            durationSec: 0,
+            driveId: df.id,
+            driveUrl: df.webViewLink || `https://drive.google.com/file/d/${df.id}/view?usp=drivesdk`,
+            isSyncedToDrive: true,
+            category: 'General Instruments',
+            createdAt: df.createdTime || new Date().toISOString()
+          });
+        });
+
+        if (newDriveVideos.length > 0) {
+          loadedVideos = [...newDriveVideos, ...loadedVideos];
+        }
+      }
+
       // Merge client uploads from localStorage so newly uploaded videos persist seamlessly across refresh
       if (typeof window !== 'undefined') {
         try {
           const savedUploads = JSON.parse(localStorage.getItem('nunes_uploaded_vids') || '[]');
           if (Array.isArray(savedUploads) && savedUploads.length > 0) {
             savedUploads.forEach(uv => {
+              // If liveDriveData is available and this uploaded video was deleted on another device from Drive, skip it
+              if (
+                liveDriveData &&
+                Array.isArray(liveDriveData.videos) &&
+                uv.driveId &&
+                uv.driveId !== 'syncing' &&
+                !liveDriveData.videos.some(df => df.id === uv.driveId)
+              ) {
+                return;
+              }
               const idx = loadedVideos.findIndex(v => v.id === uv.id || (uv.productName && v.productName === uv.productName) || (uv.driveId && v.driveId === uv.driveId));
               if (idx >= 0) {
                 loadedVideos[idx] = { ...loadedVideos[idx], ...uv };
@@ -302,19 +386,22 @@ export default function App() {
               }
             });
           }
-
-          // Filter out any videos deleted by the user
-          const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
-          if (Array.isArray(deletedIds) && deletedIds.length > 0) {
-            const deletedSet = new Set(deletedIds);
-            loadedVideos = loadedVideos.filter(v => !deletedSet.has(v.id) && !deletedSet.has(v.driveId));
-          }
         } catch (e) {}
+      }
+
+      // Filter out any videos deleted by the user
+      if (deletedSet.size > 0) {
+        loadedVideos = loadedVideos.filter(v => {
+          const idMatch = v.id && deletedSet.has(String(v.id).toLowerCase());
+          const driveMatch = v.driveId && deletedSet.has(String(v.driveId).toLowerCase());
+          const nameMatch = v.productName && deletedSet.has(`vid_name:${v.productName.toLowerCase().trim()}`);
+          return !idMatch && !driveMatch && !nameMatch;
+        });
       }
 
       setVideos(loadedVideos);
 
-      // Fetch photos - ONLY photos added by the user are shown (strict deduplication)
+      // Fetch photos - Merge local, static catalog, and live Google Drive photos across all devices
       let userPhotos = [];
       if (typeof window !== 'undefined') {
         const saved = localStorage.getItem('nunes_user_photos');
@@ -356,7 +443,6 @@ export default function App() {
             up.id === sp.id
           );
           if (matchIndex >= 0) {
-            // Preserve client base64 imageUrl if server has fallback
             userPhotos[matchIndex] = {
               ...sp,
               imageUrl: userPhotos[matchIndex].imageUrl || sp.imageUrl,
@@ -368,6 +454,67 @@ export default function App() {
         });
       } catch (err) {
         console.warn('Photo API note:', err);
+      }
+
+      // Merge live Google Drive Photos (Cross-device sync for photos uploaded on any device)
+      if (liveDriveData && Array.isArray(liveDriveData.photos)) {
+        const liveDrivePhotoIds = new Set(liveDriveData.photos.map(df => df.id));
+
+        // Remove any photo that had a verified driveId but was deleted from Google Drive on another device
+        userPhotos = userPhotos.filter(p => !p.driveId || p.driveId === 'syncing' || liveDrivePhotoIds.has(p.driveId));
+
+        liveDriveData.photos.forEach(df => {
+          const cleanTitle = (df.name || '')
+            .replace(/\.[^/.]+$/, '')
+            .replace(/\s*-\s*Copy(\s*\(\d+\))?$/i, '')
+            .replace(/\.+$/, '')
+            .trim();
+          if (!cleanTitle) return;
+          const driveThumb = `https://drive.google.com/thumbnail?id=${df.id}&sz=w1200`;
+          const existsIdx = userPhotos.findIndex(
+            p => p.driveId === df.id || (p.productName && p.productName.toLowerCase().trim() === cleanTitle.toLowerCase())
+          );
+          if (existsIdx >= 0) {
+            userPhotos[existsIdx] = {
+              ...userPhotos[existsIdx],
+              driveId: df.id,
+              driveUrl: df.webViewLink || `https://drive.google.com/file/d/${df.id}/view?usp=drivesdk`,
+              imageUrl: userPhotos[existsIdx].imageUrl?.startsWith('data:') ? userPhotos[existsIdx].imageUrl : driveThumb,
+              thumbnailUrl: userPhotos[existsIdx].thumbnailUrl?.startsWith('data:') ? userPhotos[existsIdx].thumbnailUrl : driveThumb,
+              isSyncedToDrive: true
+            };
+          } else {
+            userPhotos.unshift({
+              id: `drive_photo_${df.id}`,
+              originalFilename: df.name,
+              currentFilename: df.name,
+              productName: cleanTitle,
+              isRenamed: true,
+              imageUrl: driveThumb,
+              thumbnailUrl: driveThumb,
+              sizeMb: df.size ? Number((Number(df.size) / (1024 * 1024)).toFixed(2)) : 1.0,
+              driveId: df.id,
+              driveUrl: df.webViewLink || `https://drive.google.com/file/d/${df.id}/view?usp=drivesdk`,
+              isSyncedToDrive: true,
+              category: 'General Instruments',
+              createdAt: df.createdTime || new Date().toISOString(),
+              isUserUploaded: true
+            });
+          }
+        });
+      }
+
+      // Filter out any photos deleted by the user so they NEVER come back from photos_data.json
+      if (deletedSet.size > 0) {
+        userPhotos = userPhotos.filter(p => {
+          const rawKey = p.originalFilename || p.currentFilename || p.productName || p.id;
+          const cleanKey = String(rawKey).toLowerCase().replace(/\.[^/.]+$/, '').trim();
+          const idMatch = p.id && deletedSet.has(String(p.id).toLowerCase());
+          const driveMatch = p.driveId && deletedSet.has(String(p.driveId).toLowerCase());
+          const keyMatch = deletedSet.has(`photo_key:${cleanKey}`) || deletedSet.has(cleanKey);
+          const nameMatch = p.productName && deletedSet.has(`photo_name:${p.productName.toLowerCase().trim()}`);
+          return !idMatch && !driveMatch && !keyMatch && !nameMatch;
+        });
       }
 
       // Strong deduplication pass: single entry per unique file name / product name
@@ -671,23 +818,50 @@ export default function App() {
       .map(item => item.driveId || (item.driveUrl ? item.driveUrl.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1] : null))
       .filter(id => id && id !== 'syncing');
 
+    const namesToDelete = new Set(
+      itemsToDelete.map(item => (item.productName || '').toLowerCase().trim()).filter(Boolean)
+    );
+    const keysToDelete = new Set(
+      itemsToDelete.map(item => {
+        const raw = item.originalFilename || item.currentFilename || item.productName || item.id;
+        return String(raw).toLowerCase().replace(/\.[^/.]+$/, '').trim();
+      }).filter(Boolean)
+    );
+
     if (!isPhoto) {
-      setVideos(prev => prev.filter(v => !idsSet.has(v.id)));
+      setVideos(prev => prev.filter(v => !idsSet.has(v.id) && !(v.productName && namesToDelete.has(v.productName.toLowerCase().trim()))));
       if (selectedVideo && idsSet.has(selectedVideo.id)) setSelectedVideo(null);
       try {
         const savedUploads = JSON.parse(localStorage.getItem('nunes_uploaded_vids') || '[]');
-        const updatedUploads = savedUploads.filter(u => !idsSet.has(u.id) && !driveIdsToDelete.includes(u.driveId));
+        const updatedUploads = savedUploads.filter(u => !idsSet.has(u.id) && !driveIdsToDelete.includes(u.driveId) && !(u.productName && namesToDelete.has(u.productName.toLowerCase().trim())));
         localStorage.setItem('nunes_uploaded_vids', JSON.stringify(updatedUploads));
 
         const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
-        deletedIds.push(...selectedIds, ...driveIdsToDelete);
-        localStorage.setItem('nunes_deleted_ids', JSON.stringify(deletedIds));
+        deletedIds.push(
+          ...selectedIds,
+          ...driveIdsToDelete,
+          ...Array.from(namesToDelete).map(n => `vid_name:${n}`)
+        );
+        localStorage.setItem('nunes_deleted_ids', JSON.stringify(Array.from(new Set(deletedIds))));
       } catch (e) {}
     } else {
       setPhotos(prev => {
-        const updated = prev.filter(p => !idsSet.has(p.id));
+        const updated = prev.filter(p => {
+          const raw = p.originalFilename || p.currentFilename || p.productName || p.id;
+          const k = String(raw).toLowerCase().replace(/\.[^/.]+$/, '').trim();
+          return !idsSet.has(p.id) && !keysToDelete.has(k) && !(p.productName && namesToDelete.has(p.productName.toLowerCase().trim()));
+        });
         try {
           localStorage.setItem('nunes_user_photos', JSON.stringify(updated));
+          const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
+          deletedIds.push(
+            ...selectedIds,
+            ...driveIdsToDelete,
+            ...Array.from(keysToDelete),
+            ...Array.from(keysToDelete).map(k => `photo_key:${k}`),
+            ...Array.from(namesToDelete).map(n => `photo_name:${n}`)
+          );
+          localStorage.setItem('nunes_deleted_ids', JSON.stringify(Array.from(new Set(deletedIds))));
         } catch (e) {}
         return updated;
       });
@@ -755,6 +929,24 @@ export default function App() {
         title
       };
     });
+
+    // Clear any matching deleted keys so re-uploaded products appear normally
+    try {
+      const uploadedNames = new Set(batchRecords.map(r => r.title.toLowerCase().trim()));
+      const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
+      if (Array.isArray(deletedIds) && deletedIds.length > 0) {
+        const cleaned = deletedIds.filter(d => {
+          const s = String(d).toLowerCase();
+          for (const uName of uploadedNames) {
+            if (s === uName || s === `vid_name:${uName}` || s === `photo_name:${uName}` || s === `photo_key:${uName}`) {
+              return false;
+            }
+          }
+          return true;
+        });
+        localStorage.setItem('nunes_deleted_ids', JSON.stringify(cleaned));
+      }
+    } catch (e) {}
 
     // 1. INSTANT OPTIMISTIC UI (< 0.3s): Add all selected items to Dashboard immediately
     if (!isPhoto) {
@@ -1016,7 +1208,55 @@ export default function App() {
     );
     if (!confirmed) return;
 
-    // 1. Delete from Google Drive 24/7 Cloud
+    const cleanName = (item.productName || '').toLowerCase().trim();
+    const rawKey = item.originalFilename || item.currentFilename || item.productName || item.id;
+    const cleanKey = String(rawKey).toLowerCase().replace(/\.[^/.]+$/, '').trim();
+
+    // 1. Remove from active state and persistent storage immediately
+    if (type === 'video') {
+      setVideos(prev => prev.filter(v => v.id !== item.id && !(cleanName && (v.productName || '').toLowerCase().trim() === cleanName)));
+      if (selectedVideo && selectedVideo.id === item.id) setSelectedVideo(null);
+
+      try {
+        const savedUploads = JSON.parse(localStorage.getItem('nunes_uploaded_vids') || '[]');
+        const updatedUploads = savedUploads.filter(
+          u => u.id !== item.id && (u.productName || '').toLowerCase().trim() !== cleanName && u.driveId !== driveIdToDelete
+        );
+        localStorage.setItem('nunes_uploaded_vids', JSON.stringify(updatedUploads));
+
+        // Persist deleted IDs so items stay deleted across reloads
+        const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
+        deletedIds.push(item.id);
+        if (driveIdToDelete) deletedIds.push(driveIdToDelete);
+        if (cleanName) deletedIds.push(`vid_name:${cleanName}`);
+        localStorage.setItem('nunes_deleted_ids', JSON.stringify(Array.from(new Set(deletedIds))));
+      } catch (err) {}
+    } else {
+      setPhotos(prev => {
+        const updated = prev.filter(p => {
+          const pRaw = p.originalFilename || p.currentFilename || p.productName || p.id;
+          const pKey = String(pRaw).toLowerCase().replace(/\.[^/.]+$/, '').trim();
+          const pName = (p.productName || '').toLowerCase().trim();
+          return p.id !== item.id && pKey !== cleanKey && (!cleanName || pName !== cleanName);
+        });
+        try {
+          localStorage.setItem('nunes_user_photos', JSON.stringify(updated));
+          const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
+          deletedIds.push(item.id);
+          if (driveIdToDelete) deletedIds.push(driveIdToDelete);
+          if (cleanKey) {
+            deletedIds.push(cleanKey);
+            deletedIds.push(`photo_key:${cleanKey}`);
+          }
+          if (cleanName) deletedIds.push(`photo_name:${cleanName}`);
+          localStorage.setItem('nunes_deleted_ids', JSON.stringify(Array.from(new Set(deletedIds))));
+        } catch (e) {}
+        return updated;
+      });
+      if (selectedPhoto && selectedPhoto.id === item.id) setSelectedPhoto(null);
+    }
+
+    // 2. Delete from Google Drive 24/7 Cloud
     if (driveIdToDelete && driveIdToDelete !== 'syncing') {
       try {
         await fetch('/api/drive/delete', {
@@ -1027,33 +1267,6 @@ export default function App() {
       } catch (driveErr) {
         console.warn('Google Drive delete note:', driveErr);
       }
-    }
-
-    // 2. Remove from active state and persistent storage
-    if (type === 'video') {
-      setVideos(prev => prev.filter(v => v.id !== item.id));
-      if (selectedVideo && selectedVideo.id === item.id) setSelectedVideo(null);
-
-      try {
-        const savedUploads = JSON.parse(localStorage.getItem('nunes_uploaded_vids') || '[]');
-        const updatedUploads = savedUploads.filter(u => u.id !== item.id && u.productName !== item.productName && u.driveId !== driveIdToDelete);
-        localStorage.setItem('nunes_uploaded_vids', JSON.stringify(updatedUploads));
-
-        // Persist deleted IDs so items stay deleted across reloads
-        const deletedIds = JSON.parse(localStorage.getItem('nunes_deleted_ids') || '[]');
-        deletedIds.push(item.id);
-        if (driveIdToDelete) deletedIds.push(driveIdToDelete);
-        localStorage.setItem('nunes_deleted_ids', JSON.stringify(deletedIds));
-      } catch (err) {}
-    } else {
-      setPhotos(prev => {
-        const updated = prev.filter(p => p.id !== item.id);
-        try {
-          localStorage.setItem('nunes_user_photos', JSON.stringify(updated));
-        } catch (e) {}
-        return updated;
-      });
-      if (selectedPhoto && selectedPhoto.id === item.id) setSelectedPhoto(null);
     }
   };
 
